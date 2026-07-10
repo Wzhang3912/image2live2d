@@ -6,8 +6,8 @@ per-frame cost. Instead of baking a video, you get a rig you can drive live.
 
 ![Upload an image → automatic decompose, rig & physics → live render in the browser](media/demo.gif)
 
-*Drop a character image, and it's automatically decomposed, rigged, and rendered live — here in the
-real Live2D (Cubism) runtime, following the cursor.*
+*Drop a character image, and it's automatically decomposed, rigged, and rendered live in the browser
+— idling on its own and following the cursor.*
 
 The pipeline builds an internal **rig representation** from separated art layers, then emits it to
 standard animation formats:

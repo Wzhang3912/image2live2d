@@ -4,6 +4,11 @@ Turn character art into a **reusable, riggable 2D puppet** that animates interac
 lip-sync, gaze, head-turn, brows, limbs, and self-animating hair/cloth physics — at near-zero
 per-frame cost. Instead of baking a video, you get a rig you can drive live.
 
+![Upload an image → automatic decompose, rig & physics → live render in the browser](media/demo.gif)
+
+*Drop a character image, and it's automatically decomposed, rigged, and rendered live — here in the
+real Live2D (Cubism) runtime, following the cursor.*
+
 The pipeline builds an internal **rig representation** from separated art layers, then emits it to
 standard animation formats:
 

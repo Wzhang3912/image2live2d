@@ -44,6 +44,10 @@ assets/
 # Internal docs / planning notes (not part of the public package)
 docs/
 
+# Demo media referenced by the README (explicitly allowed past the image rules above)
+!media/
+!media/demo.gif
+
 # Generated artifacts
 out/
 *.inp

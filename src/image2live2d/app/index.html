@@ -82,7 +82,7 @@
       <h2>1 · Upload</h2>
       <label class="drop" id="drop">
         <input type="file" id="file" accept="image/png,image/jpeg,image/webp,.psd,.zip">
-        <div id="dropmsg">Drop a GPT-image PNG here<br><span class="hint">or click to choose &middot; .png / .jpg / .psd / .zip</span></div>
+        <div id="dropmsg">Drop a character image here<br><span class="hint">or click to choose &middot; .png / .jpg / .psd / .zip</span></div>
       </label>
       <div class="thumb" id="thumb"></div>
       <button id="run" disabled>Run pipeline</button>
@@ -113,7 +113,7 @@
       </div>
     </div>
     <div class="card" id="cubismcard" style="display:none">
-      <h2>5 · Cubism render <span class="hint">(real Live2D runtime rendering the generated <code>.moc3</code> — Route A)</span></h2>
+      <h2>5 · Cubism render <span class="hint">(real Live2D runtime rendering the generated <code>.moc3</code>)</span></h2>
       <div class="stage" id="cubismstage"><canvas id="cubism"></canvas><span class="ph" id="cubismph">click “Load Cubism render”</span></div>
       <div class="quick">
         <button id="loadCubism">▶ Load Cubism render</button>
@@ -408,7 +408,7 @@ function loop(){
 }
 function escapeHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
 
-// ====================  Route A: real Cubism runtime (official Cubism Core + our own WebGL renderer) =
+// ====================  real Cubism runtime (official Cubism Core + our own WebGL renderer) =======
 // Renders the ACTUAL generated .moc3 in the OFFICIAL Cubism Core for Web — the same C runtime that
 // VTube Studio uses — via a minimal WebGL renderer we control directly (no pixi / pixi-live2d-display).
 // Cubism Core loads the .moc3 and, on model.update(), gives us deformed per-drawable vertex positions,

@@ -14,7 +14,8 @@ standard animation formats:
 
 - **nijilive `.inp`** — open format; opens directly in [nijigenerate](https://github.com/nijigenerate/nijigenerate).
 - **Live2D `.moc3` bundle** — `.moc3` + `.model3.json` / `.physics3.json` / `.motion3.json` / `.cdi3.json`,
-  loadable in the Cubism Viewer and standard Live2D runtimes.
+  targeting the Cubism Viewer and standard Live2D runtimes (compatibility still being hardened — see
+  [Work in progress](#work-in-progress)).
 
 ```
 ingest → preprocess → decompose → mesh → rig authoring → physics → motion
@@ -62,6 +63,11 @@ The converter takes **already-separated layers** — a layered PSD, or a folder/
 `{order}_{role}.png` files (e.g. `00_hair_back.png`, `13_face_base.png`). Layer names drive role
 detection (face, eyes, hair, limbs, clothing, …), meshing, and rig authoring.
 
+To start from a **single flat image**, the pipeline calls a [See-through](#credits) decompose service
+(GPU) that splits the illustration into ordered layers first — this is what the demo above shows. See
+[`service/seethrough/`](service/seethrough) for the service, and [Work in progress](#work-in-progress)
+for the licensing caveat.
+
 ## Layout
 
 ```
@@ -75,6 +81,35 @@ src/image2live2d/
 tests/
 ```
 
+## Work in progress
+
+- **Single flat-image input** works today via the See-through decompose service, but that model is
+  GPU-only and its weights are trained on commercial Live2D data — a **clean-license decomposer** is
+  planned so *single image → rig* is unencumbered for commercial use. Layered PSD/zip input has no such
+  dependency and is fully open.
+- **Live2D `.moc3` export** is functional and renders in the Cubism Viewer, but broader Cubism Editor /
+  runtime and VTube Studio compatibility is still being hardened. The nijilive `.inp` path is the more
+  mature, fully-headless target today.
+- Richer expression presets, more body/clothing archetypes, and improved automatic landmark/pose
+  detection.
+
+Contributions and issues welcome.
+
+## Credits
+
+Single-image layer decomposition is powered by **See-through**, the automatic anime-character layer
+decomposer that turns one flat illustration into ordered layers — which this project then meshes, rigs,
+and animates.
+
+> Jian Lin, Chengze Li, Haoyun Qin, Kwun Wang Chan, Yanghua Jin, Hanyuan Liu, Stephen Chun Wang Choy,
+> Xueting Liu. **_See-through: Single-image Layer Decomposition for Anime Characters._** SIGGRAPH 2026.
+> [arXiv:2602.03749](https://arxiv.org/abs/2602.03749) ·
+> [code](https://github.com/shitagaki-lab/see-through) (Apache-2.0)
+
+This project also builds on [nijilive / nijigenerate](https://github.com/nijigenerate/nijigenerate)
+(the open 2D-puppet format and editor) and the [Live2D Cubism](https://www.live2d.com/) `.moc3` format.
+See-through and nijilive are independent projects and are not affiliated with this repository.
+
 ## Development
 
 ```bash
@@ -84,4 +119,5 @@ python -m pytest -q
 
 ## License
 
-See [LICENSE](LICENSE).
+See [LICENSE](LICENSE). Third-party components (See-through, nijilive, Live2D Cubism) are governed by
+their own licenses.

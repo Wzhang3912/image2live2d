@@ -1,0 +1,95 @@
+"""IRR ``Rig.physics`` -> Cubism ``.physics3.json`` (open JSON).
+
+Each IRR ``PhysicsRig`` (a driver-param -> output-param pendulum) becomes one Cubism
+``PhysicsSetting`` with an **Angle** input from the driver and an **Angle** output to the output
+param, plus a 2-vertex pendulum (fixed root + swinging tip) whose mobility/delay/acceleration are
+derived from the rig's mass/drag/length.
+
+The exact swing feel (the tuning constants below) can only be judged in a Live2D runtime — like the
+nijilive physics constants, these are first-pass values. The *structure* is what's verified here.
+"""
+
+from __future__ import annotations
+
+from ...irr.schema import Rig
+
+PHYSICS_VERSION = 3
+
+# Tuning (first-pass; verify in a Live2D runtime).
+_INPUT_WEIGHT = 60.0       # Cubism input weight (how strongly the driver swings the pendulum)
+_OUTPUT_WEIGHT = 100.0     # Cubism output weight
+_LENGTH_UNITS = 12.0       # IRR pendulum length (~1) -> Cubism position units
+_NORM = {                  # standard Cubism normalization ranges
+    "Position": {"Minimum": -10.0, "Default": 0.0, "Maximum": 10.0},
+    "Angle": {"Minimum": -10.0, "Default": 0.0, "Maximum": 10.0},
+}
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else hi if v > hi else v
+
+
+def _vertices(mass: float, drag: float, length: float) -> list[dict]:
+    """A fixed root + a swinging tip. Mobility falls with drag; delay/acceleration scale with mass."""
+    mobility = _clamp(1.0 - drag, 0.3, 0.99)
+    delay = _clamp(0.4 + 0.4 * mass, 0.4, 1.5)
+    accel = _clamp(1.0 / max(mass, 0.1), 0.5, 2.0)
+    tip_y = max(0.1, length) * _LENGTH_UNITS
+    return [
+        {"Position": {"X": 0.0, "Y": 0.0}, "Mobility": 1.0, "Delay": 1.0,
+         "Acceleration": 1.0, "Radius": 0.0},
+        {"Position": {"X": 0.0, "Y": tip_y}, "Mobility": mobility, "Delay": delay,
+         "Acceleration": accel, "Radius": tip_y},
+    ]
+
+
+def physics3(rig: Rig) -> dict:
+    """Build the ``.physics3.json`` document for ``rig`` (empty settings if it has no physics)."""
+    settings: list[dict] = []
+    dictionary: list[dict] = []
+    total_vertices = 0
+
+    for i, ph in enumerate(rig.physics, start=1):
+        setting_id = f"PhysicsSetting{i}"
+        verts = _vertices(ph.mass, ph.drag, ph.length)
+        total_vertices += len(verts)
+        settings.append({
+            "Id": setting_id,
+            # one Input per driver (primary + extras) so all driving motion excites the pendulum
+            "Input": [
+                {"Source": {"Target": "Parameter", "Id": d}, "Weight": _INPUT_WEIGHT,
+                 "Type": "Angle", "Reflect": False}
+                for d in ph.all_drivers()
+            ],
+            "Output": [{
+                "Destination": {"Target": "Parameter", "Id": ph.output_param},
+                "VertexIndex": len(verts),  # 1-based: the swinging tip drives the output
+                "Scale": 1.0,
+                "Weight": _OUTPUT_WEIGHT,
+                "Type": "Angle",
+                "Reflect": False,
+            }],
+            "Vertices": verts,
+            "Normalization": _NORM,
+        })
+        dictionary.append({"Id": setting_id, "Name": ph.output_param})
+
+    # Gravity/wind: take the first rig's (all are (0,-1)/(0,0) by default).
+    gx, gy = (rig.physics[0].gravity if rig.physics else (0.0, -1.0))
+    wx, wy = (rig.physics[0].wind if rig.physics else (0.0, 0.0))
+
+    return {
+        "Version": PHYSICS_VERSION,
+        "Meta": {
+            "PhysicsSettingCount": len(settings),
+            "TotalInputCount": sum(len(s["Input"]) for s in settings),
+            "TotalOutputCount": sum(len(s["Output"]) for s in settings),
+            "VertexCount": total_vertices,
+            "EffectiveForces": {
+                "Gravity": {"X": gx, "Y": gy},
+                "Wind": {"X": wx, "Y": wy},
+            },
+            "PhysicsDictionary": dictionary,
+        },
+        "PhysicsSettings": settings,
+    }

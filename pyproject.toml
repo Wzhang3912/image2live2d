@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "image2live2d"
+version = "0.2.0"
+description = "Convert separated character art layers into a reusable, riggable 2D puppet (nijilive .inp and Live2D .moc3)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "Apache-2.0" }
+dependencies = [
+    "pydantic>=2.6",
+]
+
+[project.scripts]
+image2live2d = "image2live2d.__main__:main"
+
+[project.optional-dependencies]
+# Heavy ML / pipeline deps are grouped so the IRR core stays light.
+decompose = ["torch", "numpy", "pillow", "psd-tools"]  # See-through wrapper, inpainting, PSD adapter
+preprocess = ["rembg", "pillow", "numpy"]          # bg removal
+mesh = ["triangle", "numpy"]                        # auto-triangulation
+rig = ["numpy", "opencv-python"]                    # landmarks/pose/fit
+app = ["pillow", "psd-tools"]                        # local web app: process PSD/layer uploads
+dev = ["pytest", "ruff", "mypy"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/image2live2d"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

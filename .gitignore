@@ -1,0 +1,57 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+.env
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# ML / model weights / data
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.onnx
+*.gguf
+*.h5
+*.pb
+*.tflite
+models/
+checkpoints/
+data/
+
+# Images / character art / other binary data (keep the repo code-only)
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.bmp
+*.tif
+*.tiff
+*.webp
+*.psd
+*.psb
+assets/
+
+# Internal docs / planning notes (not part of the public package)
+docs/
+
+# Generated artifacts
+out/
+*.inp
+*.inx
+*.moc3
+*.cmo3
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/

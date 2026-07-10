@@ -1,0 +1,596 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>image2Live2D</title>
+<style>
+  :root{
+    --bg:#ffffff; --panel:#ffffff; --panel2:#f7f8fa; --line:#e8eaed; --txt:#1a1d24;
+    --muted:#9097a3; --accent:#3b6cff; --ok:#1faf72; --fail:#e5484d; --warn:#b8730a; --run:#3b6cff;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--txt);font:14px/1.55 system-ui,-apple-system,Segoe UI,Roboto,sans-serif}
+  header{padding:18px 28px;border-bottom:1px solid var(--line);display:flex;align-items:baseline;gap:14px}
+  header h1{font-size:18px;margin:0;font-weight:650}
+  header .sub{color:var(--muted);font-size:13px}
+  .wrap{display:grid;grid-template-columns:340px 1fr;gap:20px;padding:22px 28px;max-width:1280px;margin:0 auto}
+  @media(max-width:900px){.wrap{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;box-shadow:0 1px 2px rgba(16,24,40,.04)}
+  .card h2{font-size:13px;text-transform:uppercase;letter-spacing:.06em;color:var(--muted);margin:0 0 14px}
+  .drop{display:block;border:2px dashed #c3c9d4;border-radius:10px;padding:26px 14px;text-align:center;cursor:pointer;transition:.15s}
+  .drop:hover,.drop.over{border-color:var(--accent);background:#f4f7ff}
+  .drop input{display:none}
+  .thumb{margin-top:14px;text-align:center}
+  .thumb img{max-width:100%;max-height:240px;border-radius:8px;border:1px solid var(--line)}
+  button{font:inherit;font-weight:600;padding:10px 16px;border-radius:9px;
+    background:var(--accent);color:#fff;border:none;cursor:pointer;width:100%;margin-top:14px}
+  button:disabled{opacity:.5;cursor:not-allowed}
+  button.ghost{background:var(--panel2);color:var(--txt);border:1px solid var(--line)}
+  .hint{color:var(--muted);font-size:12.5px;margin-top:10px}
+  .badge{display:inline-block;padding:2px 9px;border-radius:20px;font-size:11.5px;font-weight:700}
+  .badge.on{background:rgba(62,207,142,.15);color:var(--ok)} .badge.off{background:rgba(255,180,84,.15);color:var(--warn)}
+  /* pipeline */
+  .steps{list-style:none;margin:0;padding:0}
+  .step{display:flex;align-items:center;gap:12px;padding:11px 12px;border-radius:9px;border:1px solid transparent}
+  .step+.step{margin-top:4px}
+  .step.running{background:#f2f6ff;border-color:#d6e2ff}
+  .dot{width:20px;height:20px;border-radius:50%;flex:0 0 20px;display:grid;place-items:center;font-size:12px;font-weight:800}
+  .dot.pending{background:#eceef1;color:var(--muted)}
+  .dot.running{background:transparent;border:2px solid var(--run);animation:spin 1s linear infinite}
+  .dot.ok{background:var(--ok);color:#06291b}
+  .dot.fail{background:var(--fail);color:#3a0d0d}
+  .dot.skip{background:#eceef1;color:#aab0bb}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .step .nm{flex:1;font-weight:550}
+  .step .t{color:var(--muted);font-variant-numeric:tabular-nums;font-size:12.5px}
+  .step.fail .nm{color:var(--fail)}
+  /* result */
+  .kv{display:flex;gap:18px;flex-wrap:wrap;margin:6px 0 14px}
+  .kv div{font-size:13px} .kv b{display:block;font-size:18px}
+  .pill{font-weight:700;padding:3px 10px;border-radius:20px;font-size:12px}
+  .pill.pass{background:rgba(62,207,142,.15);color:var(--ok)} .pill.fail{background:rgba(255,107,107,.15);color:var(--fail)}
+  .note{font-size:12.5px;color:var(--warn);margin-top:6px}
+  /* preview */
+  .stage{position:relative;background:#fafafc;border-radius:10px;border:1px solid var(--line);
+    aspect-ratio:1/1;display:grid;place-items:center;overflow:hidden}
+  .stage img{width:100%;height:100%;object-fit:contain}
+  .stage canvas{max-width:100%;max-height:100%;cursor:crosshair}
+  .stage .ph{color:#aaa;font-size:13px;position:absolute}
+  .quick{display:flex;gap:8px;flex-wrap:wrap;margin:12px 0}
+  .quick button{width:auto;margin:0;padding:6px 11px;font-size:12.5px;background:var(--panel2);border:1px solid var(--line);color:var(--txt)}
+  .sliders{display:grid;grid-template-columns:1fr 1fr;gap:10px 18px;margin-top:8px}
+  @media(max-width:560px){.sliders{grid-template-columns:1fr}}
+  .sl label{display:flex;justify-content:space-between;font-size:12px;color:var(--muted)}
+  .sl input{width:100%}
+  input[type=range]{accent-color:var(--accent)}
+  .empty{color:var(--muted);text-align:center;padding:40px 0}
+  a.dl{display:block;text-decoration:none}
+</style>
+</head>
+<body>
+<header>
+  <h1>image2Live2D</h1>
+  <span class="sub">flat image &rarr; riggable .inp &mdash; decompose, rig, physics, preview</span>
+  <span id="mode" style="margin-left:auto"></span>
+</header>
+
+<div class="wrap">
+  <!-- LEFT: upload -->
+  <div>
+    <div class="card">
+      <h2>1 · Upload</h2>
+      <label class="drop" id="drop">
+        <input type="file" id="file" accept="image/png,image/jpeg,image/webp,.psd,.zip">
+        <div id="dropmsg">Drop a GPT-image PNG here<br><span class="hint">or click to choose &middot; .png / .jpg / .psd / .zip</span></div>
+      </label>
+      <div class="thumb" id="thumb"></div>
+      <button id="run" disabled>Run pipeline</button>
+      <div class="hint" id="uphint"></div>
+    </div>
+  </div>
+
+  <!-- RIGHT: pipeline + result + preview -->
+  <div style="display:grid;gap:20px">
+    <div class="card">
+      <h2>2 · Pipeline</h2>
+      <ul class="steps" id="steps"><li class="empty">Upload an image and hit “Run pipeline”.</li></ul>
+      <div id="errbox"></div>
+    </div>
+
+    <div class="card" id="resultcard" style="display:none">
+      <h2>3 · Result</h2>
+      <div class="kv" id="kv"></div>
+      <a class="dl" id="dl"><button class="ghost">⬇ Download .inp</button></a>
+    </div>
+
+    <div class="card" id="previewcard" style="display:none">
+      <h2>4 · Live view <span class="hint">(in-browser runtime — animates on its own, follows your cursor, click to react)</span></h2>
+      <div class="stage" id="stage"><canvas id="live"></canvas><span class="ph" id="liveph">loading runtime…</span></div>
+      <div class="quick" id="quick">
+        <button id="toggleAuto">⏸ Pause idle</button>
+        <span class="hint" id="livehint">move your mouse over the character &middot; click for a reaction</span>
+      </div>
+    </div>
+    <div class="card" id="cubismcard" style="display:none">
+      <h2>5 · Cubism render <span class="hint">(real Live2D runtime rendering the generated <code>.moc3</code> — Route A)</span></h2>
+      <div class="stage" id="cubismstage"><canvas id="cubism"></canvas><span class="ph" id="cubismph">click “Load Cubism render”</span></div>
+      <div class="quick">
+        <button id="loadCubism">▶ Load Cubism render</button>
+        <span class="hint" id="cubismhint">loads the official Cubism Core (the runtime VTube Studio uses) and renders the actual .moc3</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+const DECOMPOSE_READY = __DECOMPOSE_READY__;
+const $ = s => document.querySelector(s);
+let jobId=null, params=[], pollTimer=null, renderTimer=null;
+
+// mode badge
+$('#mode').innerHTML = DECOMPOSE_READY
+  ? '<span class="badge on">flat-image decompose: ON</span>'
+  : '<span class="badge off">layered-only — set IMAGE2LIVE2D_DECOMPOSE_URL for flat images</span>';
+
+// ---- upload UI ----
+const drop=$('#drop'), fileEl=$('#file'); let chosen=null;
+;['dragover','dragenter'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.add('over')}));
+;['dragleave','drop'].forEach(e=>drop.addEventListener(e,ev=>{ev.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',ev=>{ if(ev.dataTransfer.files[0]) pick(ev.dataTransfer.files[0]); });
+fileEl.addEventListener('change',()=>{ if(fileEl.files[0]) pick(fileEl.files[0]); });
+function pick(f){
+  chosen=f;
+  $('#run').disabled=false;
+  const ext=(f.name.split('.').pop()||'').toLowerCase();
+  const t=$('#thumb');
+  if(['png','jpg','jpeg','webp'].includes(ext)){
+    const url=URL.createObjectURL(f); t.innerHTML='<img src="'+url+'">';
+    if(!DECOMPOSE_READY) $('#uphint').textContent='⚠ flat image needs the decompose service; it will fail at the Decompose step unless IMAGE2LIVE2D_DECOMPOSE_URL is set.';
+    else $('#uphint').textContent='';
+  } else { t.innerHTML='<div class="hint">'+f.name+'</div>'; $('#uphint').textContent=''; }
+}
+
+// ---- run ----
+$('#run').addEventListener('click',async()=>{
+  if(!chosen) return;
+  $('#run').disabled=true; $('#resultcard').style.display='none'; $('#previewcard').style.display='none';
+  $('#errbox').innerHTML='';
+  const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name),{method:'POST',body:chosen});
+  const j=await r.json();
+  if(!j.job_id){ $('#errbox').innerHTML='<div class="note">error: '+(j.error||'failed to start')+'</div>'; $('#run').disabled=false; return; }
+  jobId=j.job_id;
+  clearInterval(pollTimer); pollTimer=setInterval(poll,500); poll();
+});
+
+// ---- poll pipeline ----
+const ICON={ok:'✓',fail:'✕',skip:'–',pending:'',running:''};
+let stepTimer=null, runStart=0, runName=null;   // live timer for the in-progress step
+async function poll(){
+  const r=await fetch('/api/jobs/'+jobId); const j=await r.json();
+  renderSteps(j.steps);
+  if(j.status==='done'){ clearInterval(pollTimer); stopTicker(); onDone(j); }
+  else if(j.status==='error'){ clearInterval(pollTimer); stopTicker(); $('#errbox').innerHTML='<div class="note">✕ '+escapeHtml(j.error)+'</div>'; $('#run').disabled=false; }
+}
+function renderSteps(steps){
+  const ul=$('#steps');
+  if(!steps.length){ return; }
+  ul.innerHTML=steps.map(s=>{
+    const t = s.status==='running' ? '<span id="steptime">0.0s</span>'
+                                   : (s.seconds?s.seconds.toFixed(2)+'s':'');
+    return '<li class="step '+s.status+'"><span class="dot '+s.status+'">'+(ICON[s.status]||'')+'</span>'+
+           '<span class="nm">'+s.name+'</span><span class="t">'+t+'</span></li>';
+  }).join('');
+  // GitHub-style live timer: tick the elapsed time of the currently-running step
+  const running=steps.find(s=>s.status==='running');
+  if(running){
+    if(running.name!==runName){ runName=running.name; runStart=performance.now(); }
+    if(!stepTimer) stepTimer=setInterval(tickStep,100);
+    tickStep();
+  } else { stopTicker(); }
+}
+function tickStep(){
+  const el=document.getElementById('steptime');
+  if(el) el.textContent=((performance.now()-runStart)/1000).toFixed(1)+'s';
+}
+function stopTicker(){ if(stepTimer){clearInterval(stepTimer); stepTimer=null;} runName=null; }
+function onDone(j){
+  $('#run').disabled=false;
+  const r=j.result||{};
+  $('#resultcard').style.display='block';
+  const pass = r.passed ? '<span class="pill pass">QA PASS</span>' : '<span class="pill fail">QA FAIL</span>';
+  let notes='';
+  if(r.reasons && r.reasons.length) notes+='<div class="note">notes: '+r.reasons.join(', ')+'</div>';
+  if(r.dead && r.dead.length) notes+='<div class="note">dead params: '+r.dead.join(', ')+'</div>';
+  if(r.runaway && r.runaway.length) notes+='<div class="note">runaway params: '+r.runaway.join(', ')+'</div>';
+  $('#kv').innerHTML =
+    '<div><b>'+pass+'</b></div>'+
+    '<div><b>'+(r.parts||0)+'</b>parts</div>'+
+    '<div><b>'+(r.params||0)+'</b>params</div>'+
+    '<div><b>'+(r.physics||0)+'</b>physics</div>'+notes;
+  $('#dl').href='/api/jobs/'+jobId+'/download';
+  loadLive();
+}
+
+// ====================  In-browser live runtime (nijilive-style)  ====================
+// Consumes the rig JSON (meshes + keyform offsets) + part textures and renders the puppet on a
+// <canvas> with a per-triangle affine warp — the same math as the server preview, but real-time,
+// driven by an idle clock (blink/breath/sway) + cursor-follow + click reaction. No human tuning.
+let RIG=null, TEX=[], RAF=null, T0=null, AUTO=true, CLICK=-99, PHYS={}, LAST=null;
+// perf: only the panel actually on-screen animates (both loops idle when scrolled away), and the
+// Canvas2D software rasterizer (card 4) is capped at 30fps — it does thousands of clip+drawImage
+// calls per frame, which Safari renders far slower than Chrome. See loop()/cubismLoop().
+let LIVE_VIS=true, CUBISM_VIS=true; const LIVE_MIN_DT=1/30;
+let HEADSET=new Set(), BODYSET=new Set();          // part indices per group (rigid-unit motion)
+const HTURN={ParamAngleX:1,ParamAngleY:1,ParamAngleZ:1};
+const BTURN={ParamBodyAngleX:1,ParamBodyAngleY:1,ParamBodyAngleZ:1};
+const MOUSE={x:0,y:0,on:false}, SMO={ax:0,ay:0,ex:0,ey:0};
+let CV,CTX; const RES=440;
+const prange=id=>{const p=RIG.params.find(x=>x.id===id); return p?[p.min,p.max]:[-1,1];};
+// cursor drive must SATURATE at each param's authored range — never overshoot it, or the head
+// over-rotates past its keyform max and the neck stretches into a "candle" at extreme cursor distance.
+const clampP=(id,v)=>{const [lo,hi]=prange(id); return v<lo?lo:v>hi?hi:v;};
+
+async function loadLive(){
+  $('#previewcard').style.display='block';
+  $('#cubismcard').style.display='block';
+  const r=await fetch('/api/jobs/'+jobId+'/rig'); RIG=await r.json();
+  TEX=await Promise.all(RIG.parts.map((_,i)=>new Promise(res=>{
+    const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null);
+    im.src='/api/jobs/'+jobId+'/tex/'+i;
+  })));
+  CV=$('#live'); CV.width=RES; CV.height=RES; CTX=CV.getContext('2d');
+  // track the cursor across the whole page (relative to the canvas centre), so the character follows
+  // it over a large region — not only when hovering the small canvas.
+  window.addEventListener('mousemove', e=>{
+    const b=CV.getBoundingClientRect(); const cx=b.left+b.width/2, cy=b.top+b.height/2;
+    MOUSE.x=Math.max(-1.5,Math.min(1.5,(e.clientX-cx)/(b.width/2)));
+    MOUSE.y=Math.max(-1.5,Math.min(1.5,(e.clientY-cy)/(b.height/2)));
+    MOUSE.on=true;
+  });
+  window.addEventListener('click', e=>{
+    if(e.target.closest('button,input,a')) return;    // ignore UI controls
+    CLICK=(performance.now()/1000)-(T0||0);
+  });
+  $('#toggleAuto').onclick=()=>{AUTO=!AUTO; $('#toggleAuto').textContent=AUTO?'⏸ Pause idle':'▶ Resume idle';};
+  $('#liveph').style.display='none';
+  PHYS={}; for(const r of (RIG.physics||[])) PHYS[r.output]={pos:0,vel:0};  // hair/skirt spring state
+  HEADSET=new Set((RIG.groups&&RIG.groups.head.parts)||[]);
+  BODYSET=new Set((RIG.groups&&RIG.groups.body.parts)||[]);
+  if(RAF) cancelAnimationFrame(RAF); T0=null; LAST=null; loop();
+  if('IntersectionObserver' in window){
+    new IntersectionObserver(es=>{
+      LIVE_VIS = es[es.length-1].isIntersecting;
+      if(LIVE_VIS && RAF===null){ LAST=null; loop(); }   // scrolled back on-screen -> resume
+    },{threshold:0.01}).observe(CV);
+  }
+}
+const has=id=>RIG.params.some(p=>p.id===id);
+function interp(p,value){
+  const k=[...p.keyforms].sort((a,b)=>a.value-b.value); if(!k.length) return {};
+  let ch;
+  if(value<=k[0].value) ch=[[k[0],1]];
+  else if(value>=k[k.length-1].value) ch=[[k[k.length-1],1]];
+  else for(let i=0;i<k.length-1;i++){const a=k[i],b=k[i+1];
+    if(a.value<=value&&value<=b.value){const t=b.value!==a.value?(value-a.value)/(b.value-a.value):0; ch=[[a,1-t],[b,t]]; break;}}
+  const o={};
+  for(const [kf,w] of ch) for(const key in kf.offsets){const arr=kf.offsets[key];
+    if(!o[key]) o[key]=arr.map(z=>[z[0]*w,z[1]*w]); else arr.forEach((z,j)=>{o[key][j][0]+=z[0]*w;o[key][j][1]+=z[1]*w;});}
+  return o;
+}
+function settingsAt(t){
+  const s={};
+  if(AUTO){
+    if(has('ParamBreath')) s.ParamBreath=0.5+0.5*Math.sin(t*2*Math.PI/4.5);
+    if(has('ParamBodyAngleZ')) s.ParamBodyAngleZ=Math.sin(t*2*Math.PI/6)*1.2;  // gentle idle lean
+    if(has('ParamBodyAngleX')) s.ParamBodyAngleX=Math.sin(t*2*Math.PI/8)*0.8;
+    const c=t%4.2; let open=1; if(c<0.10) open=1-c/0.10; else if(c<0.20) open=(c-0.10)/0.10;
+    if(has('ParamEyeLOpen')) s.ParamEyeLOpen=open;
+    if(has('ParamEyeROpen')) s.ParamEyeROpen=open;
+    // subtle idle arm settling (only present when limbs were separated) — proves arms articulate
+    const arm=Math.sin(t*2*Math.PI/6)*2.0;
+    if(has('ParamArmLA')) s.ParamArmLA=arm;
+    if(has('ParamArmRA')) s.ParamArmRA=-arm;
+  }
+  // gentle idle head sway when the cursor isn't driving it — keeps hair alive at rest
+  const idleX = AUTO && !MOUSE.on ? Math.sin(t*2*Math.PI/7)*0.22 : 0;
+  const idleTiltZ = AUTO ? Math.sin(t*2*Math.PI/9)*4 : 0;
+  const tx=MOUSE.on?MOUSE.x:idleX, ty=MOUSE.on?MOUSE.y:0;
+  SMO.ax+=(tx-SMO.ax)*0.09; SMO.ay+=(ty-SMO.ay)*0.09;
+  if(has('ParamAngleX')) s.ParamAngleX=clampP('ParamAngleX',SMO.ax*30);
+  if(has('ParamAngleY')) s.ParamAngleY=clampP('ParamAngleY',-SMO.ay*30);
+  if(has('ParamAngleZ')) s.ParamAngleZ=clampP('ParamAngleZ',(s.ParamAngleZ||0)+idleTiltZ);
+  if(has('ParamEyeBallX')) s.ParamEyeBallX=clampP('ParamEyeBallX',SMO.ax);
+  if(has('ParamEyeBallY')) s.ParamEyeBallY=clampP('ParamEyeBallY',-SMO.ay);
+  // click reaction: a clearly visible bounce — mouth opens, a quick head nod, and a blink
+  const since=t-CLICK;
+  if(since>=0 && since<0.5){
+    const k=Math.sin(since/0.5*Math.PI);
+    if(has('ParamMouthOpenY')) s.ParamMouthOpenY=k;
+    if(has('ParamAngleY')) s.ParamAngleY=clampP('ParamAngleY',(s.ParamAngleY||0)+k*12);  // little nod
+    if(since<0.16){ const c=1-since/0.16;                             // quick blink
+      if(has('ParamEyeLOpen')) s.ParamEyeLOpen=1-c;
+      if(has('ParamEyeROpen')) s.ParamEyeROpen=1-c; }
+  }
+  return s;
+}
+// Inertial pendulum physics (matches nijilive SimplePhysics): the hair/skirt hangs from a pivot that
+// moves WITH the head/body. Its rest state is 0 — i.e. hanging *with* the head — so a HELD turn shows
+// no deflection and the hair never separates from the head (or from head accessories, which rotate
+// rigidly with it). Only head/body *motion* injects an impulse -> a transient sway that settles back.
+// (The earlier position-driven model held a constant deflection at held poses, which read as a gap
+// between the side hair and the face with hard cut-out parts.)
+function simPhysics(s,dt){
+  dt=Math.min(dt,0.033);
+  for(const r of (RIG.physics||[])){
+    let drive=0;
+    for(const d of r.drivers){ const v=s[d]; if(v===undefined) continue;
+      const [lo,hi]=prange(d); drive+=(v-(lo+hi)/2)/Math.max((hi-lo)/2,1e-6); }
+    drive=Math.max(-1.5,Math.min(1.5,drive));
+    const [omin,omax]=prange(r.output), amp=Math.max(Math.abs(omin),Math.abs(omax),1e-6);
+    const st=PHYS[r.output]; if(!st) continue;
+    if(st.prev===undefined) st.prev=drive;
+    const ddrive=drive-st.prev; st.prev=drive;          // pivot MOTION this frame (not held angle)
+    st.vel += -ddrive*amp*4.5;                           // moving the head kicks the hair
+    const sp = r.model==='spring_pendulum' ? {k:55,c:6} : {k:85,c:9};  // spring = bouncier/less damped
+    st.vel += (-sp.k*st.pos - sp.c*st.vel)*dt;           // restore toward rest (hanging with the head)
+    st.pos += st.vel*dt;
+    st.pos = Math.max(omin,Math.min(omax,st.pos));
+    s[r.output]=st.pos;
+  }
+}
+function accum(s){
+  const acc={};
+  for(const p of RIG.params){const v=s[p.id]; if(v===undefined||v===0) continue;
+    const skip = HTURN[p.id]?HEADSET : (BTURN[p.id]?BODYSET : null);  // group-turn moves via rotation
+    const o=interp(p,v); for(const k in o){ if(skip&&skip.has(+k)) continue; const a=o[k];
+      if(!acc[k]) acc[k]=a.map(z=>[z[0],z[1]]); else a.forEach((z,j)=>{acc[k][j][0]+=z[0];acc[k][j][1]+=z[1];});}}
+  return acc;
+}
+// Group node rotation (matches the emitter): yaw=x-squash, pitch=y-squash, roll=in-plane, about pivot (model y-up)
+function rotAbout(x,y,px,py,roll,yaw,pitch){
+  let dx=(x-px)*Math.cos(yaw), dy=(y-py)*Math.cos(pitch);
+  const c=Math.cos(roll), sN=Math.sin(roll);
+  return [px+dx*c-dy*sN, py+dx*sN+dy*c];
+}
+function groupAngles(gr,s){
+  let roll=0,yaw=0,pitch=0;
+  if(!gr) return {roll,yaw,pitch};
+  for(const pid in gr.rot){ const ax=gr.rot[pid][0], rad=gr.rot[pid][1], p=RIG.params.find(q=>q.id===pid), v=s[pid];
+    if(p&&v){ const dn=Math.max(Math.abs(p.min),Math.abs(p.max),1e-6), a=(v/dn)*rad;
+      if(ax==='z')roll=a; else if(ax==='y')yaw=a; else pitch=a; } }
+  return {roll,yaw,pitch};
+}
+// textured triangle: (x,y)=dest canvas px, (u,v)=source texture px
+function drawTri(im,x0,y0,x1,y1,x2,y2,u0,v0,u1,v1,u2,v2){
+  CTX.save();
+  CTX.beginPath(); CTX.moveTo(x0,y0); CTX.lineTo(x1,y1); CTX.lineTo(x2,y2); CTX.closePath(); CTX.clip();
+  const den=u0*(v2-v1)-u1*v2+u2*v1+(u1-u2)*v0; if(den===0){CTX.restore();return;}
+  const m11=-(v0*(x2-x1)-v1*x2+v2*x1+(v1-v2)*x0)/den;
+  const m12=(v1*y2+v0*(y1-y2)-v2*y1+(v2-v1)*y0)/den;
+  const m21=(u0*(x2-x1)-u1*x2+u2*x1+(u1-u2)*x0)/den;
+  const m22=-(u1*y2+u0*(y1-y2)-u2*y1+(u2-u1)*y0)/den;
+  const dx=(u0*(v2*x1-v1*x2)+v0*(u1*x2-u2*x1)+(u2*v1-u1*v2)*x0)/den;
+  const dy=(u0*(v2*y1-v1*y2)+v0*(u1*y2-u2*y1)+(u2*v1-u1*v2)*y0)/den;
+  CTX.transform(m11,m12,m21,m22,dx,dy); CTX.drawImage(im,0,0); CTX.restore();
+}
+function outset(p,cx,cy,k){return [cx+(p[0]-cx)*k, cy+(p[1]-cy)*k];}
+function loop(){
+  if(!LIVE_VIS){ RAF=null; return; }            // panel off-screen -> stop (resumed by observer)
+  RAF=requestAnimationFrame(loop);
+  const now=performance.now()/1000; if(T0===null) T0=now; const t=now-T0;
+  if(LAST!==null && now-LAST < LIVE_MIN_DT) return;   // cap the software rasterizer at ~30fps
+  const dt = LAST===null ? 0.016 : now-LAST; LAST=now;
+  const s=settingsAt(t); simPhysics(s,dt);
+  const acc=accum(s);
+  const G=RIG.groups, ha=groupAngles(G&&G.head,s), ba=groupAngles(G&&G.body,s);
+  const hp=G&&G.head.pivot, bp=G&&G.body.pivot;
+  CTX.setTransform(1,0,0,1,0,0); CTX.clearRect(0,0,RES,RES);
+  for(let i=0;i<RIG.parts.length;i++){
+    const part=RIG.parts[i], im=TEX[i]; if(!im) continue;
+    const tw=im.width, th=im.height, off=acc[i];
+    const inHead=HEADSET.has(i), inBody=BODYSET.has(i);
+    const dst=part.verts.map((v,j)=>{
+      let mx=v[0]+(off?off[j][0]:0), my=v[1]+(off?off[j][1]:0);
+      if(inHead && G){ [mx,my]=rotAbout(mx,my,hp[0],hp[1],ha.roll,ha.yaw,ha.pitch); [mx,my]=rotAbout(mx,my,bp[0],bp[1],ba.roll,ba.yaw,ba.pitch); }
+      else if(inBody && G){ [mx,my]=rotAbout(mx,my,bp[0],bp[1],ba.roll,ba.yaw,ba.pitch); }
+      return [mx*RES,(1-my)*RES];
+    });
+    const src=part.uvs.map(u=>[u[0]*tw,u[1]*th]);
+    for(const tr of part.tris){
+      let a=dst[tr[0]],b=dst[tr[1]],c=dst[tr[2]];
+      const cx=(a[0]+b[0]+c[0])/3, cy=(a[1]+b[1]+c[1])/3, K=1.04; // slight outset closes seams
+      a=outset(a,cx,cy,K); b=outset(b,cx,cy,K); c=outset(c,cx,cy,K);
+      const sa=src[tr[0]],sb=src[tr[1]],sc=src[tr[2]];
+      drawTri(im,a[0],a[1],b[0],b[1],c[0],c[1],sa[0],sa[1],sb[0],sb[1],sc[0],sc[1]);
+    }
+  }
+}
+function escapeHtml(s){return (s||'').replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));}
+
+// ====================  Route A: real Cubism runtime (official Cubism Core + our own WebGL renderer) =
+// Renders the ACTUAL generated .moc3 in the OFFICIAL Cubism Core for Web — the same C runtime that
+// VTube Studio uses — via a minimal WebGL renderer we control directly (no pixi / pixi-live2d-display).
+// Cubism Core loads the .moc3 and, on model.update(), gives us deformed per-drawable vertex positions,
+// UVs and indices; we upload those straight to GL. What you see here == what loads in VTube Studio.
+function loadScript(src){return new Promise((res,rej)=>{const s=document.createElement('script');s.src=src;s.onload=res;s.onerror=()=>rej(new Error('failed '+src));document.head.appendChild(s);});}
+
+const L2D = { loaded:false, gl:null, prog:null, model:null, tex:[], draw:[], raf:null, t0:null, last:null };
+
+const _VS = `attribute vec2 aPos; attribute vec2 aUv; uniform mat4 uMvp; varying vec2 vUv;
+void main(){ vUv = aUv; gl_Position = uMvp * vec4(aPos, 0.0, 1.0); }`;
+const _FS = `precision mediump float; varying vec2 vUv; uniform sampler2D uTex;
+uniform float uOpacity; uniform vec4 uMul; uniform vec3 uScreen;
+void main(){ vec4 c = texture2D(uTex, vUv);   // Cubism textures are premultiplied-alpha
+  c.rgb *= uMul.rgb;                            // multiply color (default 1 -> noop)
+  c.rgb += uScreen.rgb * c.a;                   // screen color (default 0 -> noop)
+  gl_FragColor = c * uOpacity; }`;
+
+function _compile(gl, type, src){
+  const sh=gl.createShader(type); gl.shaderSource(sh,src); gl.compileShader(sh);
+  if(!gl.getShaderParameter(sh,gl.COMPILE_STATUS)) throw new Error('shader: '+gl.getShaderInfoLog(sh));
+  return sh;
+}
+function _tex(gl, img){
+  const t=gl.createTexture(); gl.bindTexture(gl.TEXTURE_2D,t);
+  gl.pixelStorei(gl.UNPACK_PREMULTIPLY_ALPHA_WEBGL, true);   // atlas PNG has straight alpha -> premultiply
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);             // match the official runtime: sample top-origin. The
+                                                             // moc3 UVs are emitted (u,1-v) (GL bottom-origin), so no GL flip
+  gl.texImage2D(gl.TEXTURE_2D,0,gl.RGBA,gl.RGBA,gl.UNSIGNED_BYTE,img);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MIN_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_MAG_FILTER,gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_S,gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D,gl.TEXTURE_WRAP_T,gl.CLAMP_TO_EDGE);
+  gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+  return t;
+}
+function _loadImg(url){return new Promise((res,rej)=>{const i=new Image();i.crossOrigin='anonymous';i.onload=()=>res(i);i.onerror=()=>rej(new Error('img '+url));i.src=url;});}
+
+// Cubism constantFlags bit masks (from CubismCore) — blend mode per drawable.
+const CSM_BLEND_ADD=1, CSM_BLEND_MULT=2, CSM_VISIBLE=1, CSM_VPOS_CHANGED=1<<5;
+
+async function loadCubism(){
+  const ph=$('#cubismph'), btn=$('#loadCubism');
+  btn.disabled=true;
+  try{
+    if(!L2D.loaded){
+      ph.textContent='loading Cubism Core…';
+      await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
+      L2D.loaded=true;
+    }
+    ph.textContent='building .moc3 bundle…';
+    const base='/api/jobs/'+jobId+'/live2d/';
+    const m3=await (await fetch(base+'model.model3.json')).json();
+    const fr=m3.FileReferences;
+    const mocBuf=await (await fetch(base+fr.Moc)).arrayBuffer();
+
+    const moc=Live2DCubismCore.Moc.fromArrayBuffer(mocBuf);
+    if(!moc) throw new Error('Cubism Core rejected the .moc3 (Moc.fromArrayBuffer=null)');
+    const model=Live2DCubismCore.Model.fromMoc(moc);
+    if(!model) throw new Error('Model.fromMoc failed');
+
+    // GL context + program (reused across reloads)
+    const cv=$('#cubism'); cv.width=440; cv.height=440;
+    let gl=L2D.gl;
+    if(!gl){
+      gl=cv.getContext('webgl',{premultipliedAlpha:true,alpha:true,antialias:true});
+      if(!gl) throw new Error('WebGL unavailable');
+      const p=gl.createProgram();
+      gl.attachShader(p,_compile(gl,gl.VERTEX_SHADER,_VS));
+      gl.attachShader(p,_compile(gl,gl.FRAGMENT_SHADER,_FS));
+      gl.linkProgram(p);
+      if(!gl.getProgramParameter(p,gl.LINK_STATUS)) throw new Error('link: '+gl.getProgramInfoLog(p));
+      L2D.gl=gl; L2D.prog=p;
+      L2D.loc={ aPos:gl.getAttribLocation(p,'aPos'), aUv:gl.getAttribLocation(p,'aUv'),
+        uMvp:gl.getUniformLocation(p,'uMvp'), uTex:gl.getUniformLocation(p,'uTex'),
+        uOpacity:gl.getUniformLocation(p,'uOpacity'), uMul:gl.getUniformLocation(p,'uMul'),
+        uScreen:gl.getUniformLocation(p,'uScreen') };
+    }
+    ph.textContent='loading textures…';
+    L2D.tex = await Promise.all((fr.Textures||[]).map(async t=>_tex(gl, await _loadImg(base+t))));
+
+    // per-drawable static data: uv + indices NEVER change -> upload to their own GL buffers ONCE.
+    // Only vertex positions change per frame (and only when Cubism flags them). Re-uploading the
+    // static uv/index arrays every frame (the old path) was the main Safari perf sink.
+    const d=model.drawables, n=d.count;
+    if(L2D.draw) for(const o of L2D.draw){ gl.deleteBuffer(o.uvBuf); gl.deleteBuffer(o.idxBuf); gl.deleteBuffer(o.posBuf); }
+    L2D.draw=[]; L2D.pidx={};
+    const pids=model.parameters.ids; for(let i=0;i<pids.length;i++) L2D.pidx[pids[i]]=i;
+    for(let i=0;i<n;i++){
+      const uvBuf=gl.createBuffer();
+      gl.bindBuffer(gl.ARRAY_BUFFER,uvBuf);
+      gl.bufferData(gl.ARRAY_BUFFER,d.vertexUvs[i],gl.STATIC_DRAW);
+      const idxBuf=gl.createBuffer();
+      gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,idxBuf);
+      gl.bufferData(gl.ELEMENT_ARRAY_BUFFER,d.indices[i],gl.STATIC_DRAW);
+      L2D.draw.push({ i, tex:d.textureIndices[i], nIdx:d.indices[i].length,
+        uvBuf, idxBuf, posBuf:gl.createBuffer(), posUp:false, flags:d.constantFlags[i] });
+    }
+    L2D.model=model;
+    model.update();                 // rest pose
+    L2D.mvp=computeFit(model);      // FIXED camera from the rest pose (see cubismLoop)
+    if(L2D.raf) cancelAnimationFrame(L2D.raf);
+    L2D.t0=null; L2D.last=null;
+    ph.style.display='none';
+    $('#cubismhint').textContent='OFFICIAL Cubism Core ('+n+' drawables, '+pids.length+' params) · what you see = what loads in VTube Studio';
+    CUBISM_VIS=true; cubismLoop();
+    if('IntersectionObserver' in window){
+      new IntersectionObserver(es=>{
+        CUBISM_VIS = es[es.length-1].isIntersecting;
+        if(CUBISM_VIS && L2D.raf===null) cubismLoop();   // scrolled back on-screen -> resume
+      },{threshold:0.01}).observe(cv);
+    }
+  }catch(e){
+    ph.style.display=''; ph.textContent='Cubism load failed: '+e.message; btn.disabled=false;
+    console.error(e);
+  }
+}
+
+// project the model's CURRENT vertex bbox into the square canvas (y-up model -> y-up clip), centered
+function computeFit(m){
+  const d=m.drawables; let minX=1e9,minY=1e9,maxX=-1e9,maxY=-1e9;
+  for(let i=0;i<d.count;i++){ if(!(d.dynamicFlags[i]&CSM_VISIBLE)) continue;
+    const vp=d.vertexPositions[i]; for(let k=0;k<vp.length;k+=2){
+      if(vp[k]<minX)minX=vp[k]; if(vp[k]>maxX)maxX=vp[k];
+      if(vp[k+1]<minY)minY=vp[k+1]; if(vp[k+1]>maxY)maxY=vp[k+1]; } }
+  if(minX>maxX){ minX=-1;maxX=1;minY=-1;maxY=1; }
+  const cx=(minX+maxX)/2, cy=(minY+maxY)/2, sc=1.8/Math.max(maxX-minX, maxY-minY, 1e-6);
+  return new Float32Array([ sc,0,0,0, 0,sc,0,0, 0,0,1,0, -cx*sc,-cy*sc,0,1 ]);
+}
+function cubismLoop(){
+  if(!CUBISM_VIS){ L2D.raf=null; return; }       // panel off-screen -> stop (resumed by observer)
+  const gl=L2D.gl, m=L2D.model, loc=L2D.loc, d=m.drawables;
+  const now=performance.now()/1000; if(L2D.t0===null) L2D.t0=now; const t=now-L2D.t0;
+  const dt=L2D.last===null?0.016:now-L2D.last; L2D.last=now;
+
+  // drive the SAME parameters as the .inp preview (cursor-follow, idle, physics, click reaction)
+  if(RIG){
+    const s=settingsAt(t); simPhysics(s,dt);
+    const vals=m.parameters.values;
+    for(const id in s){ const pi=L2D.pidx[id]; if(pi!==undefined && s[id]!==undefined) vals[pi]=s[id]; }
+  }
+  m.update();
+
+  // FIXED camera: compute the fit ONCE (from the rest pose) and reuse it every frame. A per-frame
+  // re-fit makes the whole character jump/shift when the head moves — a VTuber view keeps the camera
+  // still so only the model animates.
+  const mvp = L2D.mvp || computeFit(m);
+
+  gl.viewport(0,0,440,440);
+  gl.clearColor(0,0,0,0); gl.clear(gl.COLOR_BUFFER_BIT);
+  gl.useProgram(L2D.prog);
+  gl.enable(gl.BLEND); gl.disable(gl.DEPTH_TEST); gl.disable(gl.CULL_FACE);
+  gl.uniformMatrix4fv(loc.uMvp,false,mvp); gl.uniform1i(loc.uTex,0);
+  gl.activeTexture(gl.TEXTURE0);
+
+  // render back-to-front by Cubism renderOrder
+  const order=L2D.draw.slice().sort((a,b)=>d.renderOrders[a.i]-d.renderOrders[b.i]);
+  for(const dr of order){
+    const i=dr.i;
+    if(!(d.dynamicFlags[i]&CSM_VISIBLE)) continue;
+    const op=d.opacities[i]; if(op<=0) continue;
+    // blend mode per drawable
+    if(dr.flags&CSM_BLEND_ADD) gl.blendFuncSeparate(gl.ONE,gl.ONE,gl.ZERO,gl.ONE);
+    else if(dr.flags&CSM_BLEND_MULT) gl.blendFuncSeparate(gl.DST_COLOR,gl.ONE_MINUS_SRC_ALPHA,gl.ZERO,gl.ONE);
+    else gl.blendFuncSeparate(gl.ONE,gl.ONE_MINUS_SRC_ALPHA,gl.ONE,gl.ONE_MINUS_SRC_ALPHA);
+    gl.bindTexture(gl.TEXTURE_2D, L2D.tex[dr.tex]||L2D.tex[0]);
+    const mc=d.multiplyColors, sco=d.screenColors;
+    gl.uniform1f(loc.uOpacity,op);
+    gl.uniform4f(loc.uMul,mc[i*4],mc[i*4+1],mc[i*4+2],mc[i*4+3]);
+    gl.uniform3f(loc.uScreen,sco[i*4],sco[i*4+1],sco[i*4+2]);
+    // positions: re-upload only when Cubism says they moved (or on first draw). uv+indices are static.
+    gl.bindBuffer(gl.ARRAY_BUFFER,dr.posBuf);
+    if(!dr.posUp || (d.dynamicFlags[i]&CSM_VPOS_CHANGED)){
+      gl.bufferData(gl.ARRAY_BUFFER,d.vertexPositions[i],gl.DYNAMIC_DRAW); dr.posUp=true; }
+    gl.enableVertexAttribArray(loc.aPos); gl.vertexAttribPointer(loc.aPos,2,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ARRAY_BUFFER,dr.uvBuf);
+    gl.enableVertexAttribArray(loc.aUv); gl.vertexAttribPointer(loc.aUv,2,gl.FLOAT,false,0,0);
+    gl.bindBuffer(gl.ELEMENT_ARRAY_BUFFER,dr.idxBuf);
+    gl.drawElements(gl.TRIANGLES,dr.nIdx,gl.UNSIGNED_SHORT,0);
+  }
+  L2D.raf=requestAnimationFrame(cubismLoop);
+}
+window.addEventListener('DOMContentLoaded',()=>{const b=$('#loadCubism'); if(b) b.onclick=loadCubism;});
+</script>
+</body>
+</html>

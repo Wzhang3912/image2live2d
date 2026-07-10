@@ -83,10 +83,6 @@ tests/
 
 ## Work in progress
 
-- **Single flat-image input** works today via the See-through decompose service, but that model is
-  GPU-only and its weights are trained on commercial Live2D data — a **clean-license decomposer** is
-  planned so *single image → rig* is unencumbered for commercial use. Layered PSD/zip input has no such
-  dependency and is fully open.
 - **Live2D `.moc3` export** is functional and renders in the Cubism Viewer, but broader Cubism Editor /
   runtime and VTube Studio compatibility is still being hardened. The nijilive `.inp` path is the more
   mature, fully-headless target today.

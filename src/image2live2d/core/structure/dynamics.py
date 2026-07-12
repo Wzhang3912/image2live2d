@@ -37,7 +37,7 @@ score weights/thresholds below are the knobs P1b calibrates against real pro mod
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import Enum
 from typing import Callable
 
@@ -219,7 +219,11 @@ def _score_one(
                 continue
             u = (i + 0.5) / n
             ncov += 1
-            su += u; sv += v; suu += u * u; svv += v * v; suv += u * v
+            su += u
+            sv += v
+            suu += u * u
+            svv += v * v
+            suv += u * v
             if v < vmin:
                 vmin = v
             if v > vmax:
@@ -234,7 +238,9 @@ def _score_one(
                     continue                        # interior direction (part covers the neighbor)
                 if total[nj][ni] > 0:               # another part fills the gap -> attached
                     attached_edges += 1
-                    au += u; av += v; an += 1
+                    au += u
+                    av += v
+                    an += 1
                 else:                               # nothing there -> a free edge
                     free_edges += 1
 

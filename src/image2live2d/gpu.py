@@ -87,7 +87,6 @@ class GpuService:
 
     def _wait_healthy(self) -> None:
         url = f"{self.base_url}/health"
-        deadline = None  # set on first loop using a monotonic-ish counter of elapsed polls
         waited = 0.0
         while waited <= self.boot_timeout:
             try:

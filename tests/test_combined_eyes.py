@@ -20,7 +20,7 @@ def _two_eye_image(size=256):
 
 def test_split_lr_separates_two_blobs():
     pytest.importorskip("PIL")
-    from image2live2d.core.decompose import _split_lr
+    from image2live2d.core.decompose.sources import _split_lr
 
     left, right = _split_lr(_two_eye_image())
     # left image keeps only the left blob (alpha present on the left, gone on the right) and vice versa
@@ -37,7 +37,7 @@ def test_split_lr_separates_thin_lashes_on_tall_canvas():
     detection fixes it. This builds the failure case: two ~4px-tall lash strokes on a 1280 canvas."""
     pytest.importorskip("PIL")
     from PIL import Image, ImageDraw
-    from image2live2d.core.decompose import _split_lr
+    from image2live2d.core.decompose.sources import _split_lr
 
     img = Image.new("RGBA", (1280, 1280), (0, 0, 0, 0))
     d = ImageDraw.Draw(img)
@@ -53,7 +53,7 @@ def test_split_lr_separates_thin_lashes_on_tall_canvas():
 def test_split_lr_returns_none_for_single_blob():
     pytest.importorskip("PIL")
     from PIL import Image, ImageDraw
-    from image2live2d.core.decompose import _split_lr
+    from image2live2d.core.decompose.sources import _split_lr
 
     img = Image.new("RGBA", (256, 256), (0, 0, 0, 0))
     ImageDraw.Draw(img).ellipse([100, 100, 156, 156], fill=(0, 0, 0, 255))  # one blob

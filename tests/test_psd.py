@@ -68,8 +68,8 @@ def test_raws_to_stack_builds_pipeline_ready_stack(tmp_path):
             ((n, blob(b)) for n, b in specs)]
 
     stack = raws_to_stack(raws, canvas, tmp_path / "layers")
-    assert [l.semantic_role for l in stack.layers] == [R.face_base, R.eye_l, R.eye_r, R.mouth]
-    assert [l.draw_order for l in stack.layers] == [0, 1, 2, 3]
+    assert [lyr.semantic_role for lyr in stack.layers] == [R.face_base, R.eye_l, R.eye_r, R.mouth]
+    assert [lyr.draw_order for lyr in stack.layers] == [0, 1, 2, 3]
     assert stack.canvas_width == 64
 
     # the extracted stack drives the rest of the spine unchanged
@@ -105,7 +105,7 @@ def test_from_psd_end_to_end(tmp_path):
 
     stack = from_psd(psd_path, tmp_path / "layers")
     assert stack.layers[0].semantic_role is R.face_base  # bottom layer first
-    assert {R.eye_l, R.eye_r, R.mouth} <= {l.semantic_role for l in stack.layers}
+    assert {R.eye_l, R.eye_r, R.mouth} <= {lyr.semantic_role for lyr in stack.layers}
     rig = rig_from_stack(stack, name="char")
     assert "ParamMouthOpenY" in rig.parameter_ids()
     assert len(rig.parts) == 4

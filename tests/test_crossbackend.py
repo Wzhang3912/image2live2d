@@ -84,12 +84,12 @@ def test_animation_targets_match_across_backends():
     name_by_uuid = {p["uuid"]: p["name"] for p in puppet["param"]}
 
     niji_idle = puppet["animations"]["idle"]
-    niji_targets = {name_by_uuid[l["uuid"]] for l in niji_idle["lanes"]}
-    niji_counts = {name_by_uuid[l["uuid"]]: len(l["keyframes"]) for l in niji_idle["lanes"]}
+    niji_targets = {name_by_uuid[ln["uuid"]] for ln in niji_idle["lanes"]}
+    niji_counts = {name_by_uuid[ln["uuid"]]: len(ln["keyframes"]) for ln in niji_idle["lanes"]}
 
     anim = next(a for a in rig.animations if a.name == "idle")
     live2d_targets = {c["Id"] for c in motion3(anim)["Curves"]}
-    irr_targets = {l.param_id for l in anim.lanes}
+    irr_targets = {ln.param_id for ln in anim.lanes}
 
     assert niji_targets == live2d_targets == irr_targets
     # same number of keyframes per lane on the nijilive side as the IRR

@@ -31,7 +31,8 @@ def _sample():
     params = [EmitParam("ParamAngleX", -30.0, 30.0, 0.0, [-30.0, 0.0, 30.0])]
     parts = [EmitPart("PartBody", 500.0), EmitPart("PartTri", 400.0)]
     rest = [(-0.5, -0.5), (0.5, -0.5), (0.5, 0.5), (-0.5, 0.5)]
-    shift = lambda dx: [(x + dx, y) for x, y in rest]
+    def shift(dx):
+        return [(x + dx, y) for x, y in rest]
     quad = EmitMesh("Quad", 0, 0, [(0, 1), (1, 1), (1, 0), (0, 0)], [(0, 1, 2), (0, 2, 3)],
                     param_indices=[0], keyforms=[shift(-0.3), rest, shift(0.3)])
     tri = EmitMesh("Tri", 1, 0, [(0, 0), (1, 0), (0.5, 1)], [(0, 1, 2)],

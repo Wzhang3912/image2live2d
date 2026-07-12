@@ -101,7 +101,8 @@ def test_rig_json_export_for_live_runtime(tmp_path):
     assert ax["keyforms"] and all(isinstance(k, int)                  # offsets keyed by part index
                                   for kf in ax["keyforms"] for k in kf["offsets"])
     # one texture path per exported part, all present on disk
-    parts = app._ordered_parts(job)
+    from image2live2d.app import server as _srv
+    parts = _srv._ordered_parts(job)
     assert len(parts) == rig["nparts"]
     assert all((layer.texture_path).exists() for layer, _ in parts)
 
@@ -126,11 +127,13 @@ def test_managed_gpu_starts_and_always_releases(tmp_path, monkeypatch):
 
     class FakeGpu:
         def __init__(self): self.acq = self.rel = 0
-        def acquire(self, log=lambda m: None): self.acq += 1; return "http://localhost:8000"
+        def acquire(self, log=lambda m: None):
+            self.acq += 1
+            return "http://localhost:8000"
         def release(self): self.rel += 1
 
     fake = FakeGpu()
-    monkeypatch.setattr(app, "_gpu_manager", lambda: fake)
+    monkeypatch.setattr("image2live2d.app.server._gpu_manager", lambda: fake)
 
     # decompose will fail (no real service at the tunnel URL) — release must still happen
     job = _wait(app.get_job(app.start_job(b"\x89PNG\r\nnot-an-image", "hero.png")))

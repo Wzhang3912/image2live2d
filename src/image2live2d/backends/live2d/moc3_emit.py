@@ -19,7 +19,7 @@ SourcesBeginIndices` in **float-component units** (= 2 × vertex offset). See KE
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field as dfield
+from dataclasses import dataclass
 
 from .moc3_binary import COUNT_KEYS, FIELDS, Moc3, V3_00
 
@@ -438,19 +438,27 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
             verts = [v for p, m in _dm if p.id in part_ids for v in m.vertices]
             if not verts:
                 return
-            xs = [v[0] for v in verts]; ys = [v[1] for v in verts]
+            xs = [v[0] for v in verts]
+            ys = [v[1] for v in verts]
             bx0, bx1, by0, by1 = min(xs), max(xs), min(ys), max(ys)
-            mx = (bx1 - bx0) * 0.12 + 1e-3; my = (by1 - by0) * 0.12 + 1e-3   # margin: children stay inside
-            bx0 -= mx; bx1 += mx; by0 -= my; by1 += my
-            bw = (bx1 - bx0) or 1e-6; bh = (by1 - by0) or 1e-6
+            mx = (bx1 - bx0) * 0.12 + 1e-3   # margin: children stay inside
+            my = (by1 - by0) * 0.12 + 1e-3
+            bx0 -= mx
+            bx1 += mx
+            by0 -= my
+            by1 += my
+            bw = (bx1 - bx0) or 1e-6
+            bh = (by1 - by0) or 1e-6
             ROWS = COLS = 12                                             # fine grid -> smooth squash
             rest = [(bx0 + bw * c / COLS, by0 + bh * r / ROWS)
                     for r in range(ROWS + 1) for c in range(COLS + 1)]   # row-major, r outer / c inner
             gkfs = []
             for _idx in range(_tot):
-                _rem = _idx; fr = {}
+                _rem = _idx
+                fr = {}
                 for _pi, _pid in enumerate(turn_ids):
-                    _ki = _rem % len(_kp[_pi]); _rem //= len(_kp[_pi])
+                    _ki = _rem % len(_kp[_pi])
+                    _rem //= len(_kp[_pi])
                     fr[_pid] = _norm_frac(_pid, _kp[_pi][_ki])
                 yaw = fr.get("ParamAngleX", 0.0) * HEAD_YAW
                 pitch = fr.get("ParamAngleY", 0.0) * HEAD_PITCH
@@ -514,9 +522,11 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
             pos = [list(v) for v in mesh.vertices]        # rest (our space)
             rem = idx
             for pi, p in enumerate(affecting):
-                ki = rem % len(keys_per[pi]); rem //= len(keys_per[pi])
+                ki = rem % len(keys_per[pi])
+                rem //= len(keys_per[pi])
                 for j, (dx, dy) in enumerate(_offset_at(p, keys_per[pi][ki], part.id, nv)):
-                    pos[j][0] += dx; pos[j][1] += dy
+                    pos[j][0] += dx
+                    pos[j][1] += dy
             conv = warp_child_conv[part.id] if is_child else to_moc
             keyforms.append([conv(x, y) for x, y in pos])
 
@@ -583,18 +593,28 @@ def build_atlas(rig, asset_root, *, atlas_size=4096, pad=2):
     # 2) shelf-pack (tallest first); scale everything down uniformly if it overflows the atlas
     order = sorted(range(len(crops)), key=lambda i: -crops[i][1].height)
     def try_pack(scale):
-        placements = {}; x = pad; y = pad; row_h = 0
+        placements = {}
+        x = pad
+        y = pad
+        row_h = 0
         for i in order:
-            cw = max(1, int(crops[i][1].width * scale)); ch = max(1, int(crops[i][1].height * scale))
+            cw = max(1, int(crops[i][1].width * scale))
+            ch = max(1, int(crops[i][1].height * scale))
             if x + cw + pad > atlas_size:
-                x = pad; y += row_h + pad; row_h = 0
+                x = pad
+                y += row_h + pad
+                row_h = 0
             if y + ch + pad > atlas_size:
                 return None
-            placements[i] = (x, y, cw, ch); x += cw + pad; row_h = max(row_h, ch)
+            placements[i] = (x, y, cw, ch)
+            x += cw + pad
+            row_h = max(row_h, ch)
         return placements
-    scale = 1.0; placements = try_pack(scale)
+    scale = 1.0
+    placements = try_pack(scale)
     while placements is None and scale > 0.1:
-        scale *= 0.8; placements = try_pack(scale)
+        scale *= 0.8
+        placements = try_pack(scale)
     if placements is None:
         raise ValueError("atlas packing failed (too many/large parts)")
 

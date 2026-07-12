@@ -99,8 +99,8 @@ def test_from_layer_dir_reads_roles_and_order(tmp_path):
     (tmp_path / "00_face_base.png").write_bytes(solid_png(64, 64))
     (tmp_path / "10_eye_l.png").write_bytes(solid_png(16, 8))
     stack = decompose.from_layer_dir(tmp_path)
-    assert [l.draw_order for l in stack.layers] == [0, 10, 20]  # sorted by order
-    assert [l.semantic_role for l in stack.layers] == [
+    assert [lyr.draw_order for lyr in stack.layers] == [0, 10, 20]  # sorted by order
+    assert [lyr.semantic_role for lyr in stack.layers] == [
         SemanticRole.face_base, SemanticRole.eye_l, SemanticRole.mouth
     ]
     assert stack.canvas_width == 64 and stack.canvas_height == 64

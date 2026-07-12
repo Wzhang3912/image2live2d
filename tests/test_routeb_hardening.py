@@ -87,10 +87,10 @@ def test_generate_idle_lanes():
     assert len(anims) == 1
     idle = anims[0]
     assert idle.name == "idle" and idle.loop and idle.length == motion.IDLE_FRAMES
-    lane_ids = {l.param_id for l in idle.lanes}
+    lane_ids = {ln.param_id for ln in idle.lanes}
     assert lane_ids == {"ParamEyeLOpen", "ParamEyeROpen", "ParamBreath", "ParamBodyAngleX"}
     # blink actually closes (a 0.0 keyframe) and reopens
-    blink = next(l for l in idle.lanes if l.param_id == "ParamEyeLOpen")
+    blink = next(ln for ln in idle.lanes if ln.param_id == "ParamEyeLOpen")
     vals = [k.value for k in blink.keyframes]
     assert 0.0 in vals and vals[0] == 1.0 and vals[-1] == 1.0
 
@@ -111,7 +111,7 @@ def test_generate_idle_empty_without_idle_params():
 def test_idle_uses_head_sway_without_body():
     params = [make_parameter("ParamAngleX")]  # no body param
     idle = motion.generate_idle(params)[0]
-    assert {l.param_id for l in idle.lanes} == {"ParamAngleX"}
+    assert {ln.param_id for ln in idle.lanes} == {"ParamAngleX"}
 
 
 # --------------------------------------------------------------------------------------------------

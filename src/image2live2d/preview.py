@@ -171,7 +171,8 @@ def render_pose(stack, meshes, params, settings: dict | None = None, *, res: int
         for tri in m.triangles:
             dst = [tuple(dst_px[i]) for i in tri]
             src = [tuple(src_px[i]) for i in tri]
-            xs = [p[0] for p in dst]; ys = [p[1] for p in dst]
+            xs = [p[0] for p in dst]
+            ys = [p[1] for p in dst]
             bx0, by0 = max(0, int(np.floor(min(xs)))), max(0, int(np.floor(min(ys))))
             bx1, by1 = min(res, int(np.ceil(max(xs)))), min(res, int(np.ceil(max(ys))))
             if bx1 - bx0 < 1 or by1 - by0 < 1:

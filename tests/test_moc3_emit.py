@@ -84,8 +84,11 @@ def test_rig_to_moc3_full_pipeline():
     r = read_moc3(write_moc3(rig_to_moc3(_mini_rig())))
     assert r.counts["artMeshes"] == 1 and r.counts["parameters"] == 1 and r.counts["parts"] == 1
     assert r.get("parameters", "ids") == ["ParamAngleX"]
-    # one param with 3 keys -> 3 keyforms for the mesh
-    assert r.get("artMeshes", "keyformSourcesCounts") == [3]
+    # The only part is a head part (face_base) and its only driver is a head-turn param, so the turn is
+    # applied by the D_HEAD warp deformer (nijilive-style squash about the neck base) rather than baked
+    # into the mesh keyforms -> the mesh keeps a single rest keyform and one warp deformer is emitted.
+    assert r.get("artMeshes", "keyformSourcesCounts") == [1]
+    assert r.counts["warpDeformers"] == 1 and r.get("deformers", "ids") == ["D_HEAD"]
     assert r.get("keys", "values") == [-30.0, 0.0, 30.0]
 
 

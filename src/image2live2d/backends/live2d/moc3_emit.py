@@ -23,9 +23,25 @@ from dataclasses import dataclass, field as dfield
 
 from .moc3_binary import COUNT_KEYS, FIELDS, Moc3, V3_00
 
-# Whether keyformPositionSourcesBeginIndices count floats (2×) or XY pairs (1×). Haru's UV begin is
-# float-component; positions are assumed the same until PurismCore confirms. One-line flip if wrong.
+# keyformPositionSourcesBeginIndices are in FLOAT-COMPONENT units (2× the pair index) — CONFIRMED by
+# decoding the real Haru sample: its begin[0]=35568 overflows the pair array (34664) but is a valid
+# float index (÷2 = 17784 pairs). Same convention as uvSourcesBeginIndices.
 KEYFORM_POS_UNIT = 2   # 2 = float-component units, 1 = XY-pair units
+
+# Each keyform's position block is padded with (0,0) up to a multiple of KEYFORM_ALIGN_PAIRS pairs
+# (= 64 bytes, Cubism's SIMD alignment) — VERIFIED against Haru: mesh#0 (54 verts) and mesh#1 (51 verts)
+# BOTH stride 56 pairs = align8(vc); 285 art-mesh + 317 warp keyform strides matched with 0 exceptions,
+# and total keyformPositions == Σ align8(vc)·keyformCount exactly. The native Cubism runtime computes a
+# keyform's position address as keyform_index × align8(vertexCount) (SIMD stride) and IGNORES the stored
+# begin index; tightly-packed keyforms therefore render assembled in the web Core (which reads the stored
+# begins) but SCATTER in the native Viewer/VTube Studio — exactly the core/Viewer split we chased.
+KEYFORM_ALIGN_PAIRS = 8
+
+
+def _pad_keyform(keyform_pos: list) -> None:
+    """Pad the shared keyform-position list up to the next KEYFORM_ALIGN_PAIRS boundary with (0,0)."""
+    while len(keyform_pos) % KEYFORM_ALIGN_PAIRS:
+        keyform_pos.append((0.0, 0.0))
 
 
 @dataclass
@@ -170,8 +186,9 @@ def build_moc3(canvas: dict, params: list[EmitParam], parts: list[EmitPart],
         for kf in m.keyforms:                                          # one keyform per grid point
             amk_opacity.append(1.0)
             amk_draworder.append(parts[m.part_index].draw_order)
-            amk_pos_begin.append(KEYFORM_POS_UNIT * len(keyform_pos))
+            amk_pos_begin.append(KEYFORM_POS_UNIT * len(keyform_pos))   # block start is 8-pair aligned
             keyform_pos.extend(kf)
+            _pad_keyform(keyform_pos)                                   # 64-byte SIMD alignment (native)
 
     # ---- warp deformers (grid) : head-turn via a real deformer -------------------------------------
     # Children set parentDeformerIndices -> the deformer; the deformer grid deforms per param combo and
@@ -209,8 +226,9 @@ def build_moc3(canvas: dict, params: list[EmitParam], parts: list[EmitPart],
         wd_cols.append(w.columns)
         for grid in w.keyforms:                         # one grid per param-combo keyform
             wdk_opacity.append(1.0)
-            wdk_pos_begin.append(KEYFORM_POS_UNIT * len(keyform_pos))
+            wdk_pos_begin.append(KEYFORM_POS_UNIT * len(keyform_pos))   # block start is 8-pair aligned
             keyform_pos.extend(grid)
+            _pad_keyform(keyform_pos)                    # 64-byte SIMD alignment (native runtime stride)
         for cid in w.child_ids:                         # re-parent children under this deformer
             mi = mesh_index.get(cid)
             if mi is not None:
@@ -352,8 +370,14 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
     _dm = [(p, rig.mesh_for(p.id)) for p in drawn]
     head_ids = head_group_ids(_dm)
     neck_ids = {p.id for p, _ in _dm if p.semantic_role is _SR.neck}
-    HEAD_SHIFT = 0.045          # head translation at full turn (normalized model space)
-    HEAD_ROLL = 0.30           # radians of head tilt at full ParamAngleZ
+    # Head turn = pseudo-3D SQUASH + roll ABOUT THE NECK BASE (the nijilive / inochi2d model), NOT a
+    # translation. Yaw squashes the head horizontally, pitch squashes it vertically, roll tilts it — all
+    # about the neck-base pivot, so the head stays ANCHORED at the neck and the neck itself never moves or
+    # stretches. (Translating the head, the old approach, dragged the pinned neck into a rubber stretch.)
+    # Magnitudes match the nijilive head-group rotation (backends/nijilive/puppet.py _HEAD_ROT).
+    HEAD_YAW = 0.52            # radians of pseudo-3D yaw (horizontal squash) at full ParamAngleX
+    HEAD_PITCH = 0.42          # radians of pseudo-3D pitch (vertical squash) at full ParamAngleY
+    HEAD_ROLL = 0.35           # radians of in-plane roll at full ParamAngleZ
     # The head turns as a rigid unit (translate + roll) exactly like the niji runtime. No neck "lift" is
     # applied: an earlier version raised the head on turn to expose the neck, but that stretched the neck
     # and shrank the head vs the .inp/niji render, so it's removed — the head stays full size through turns.
@@ -383,75 +407,97 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
     # keyforms warp them. We build the grid so the head rows translate/roll and the shoulder row stays.
     warps = []
     turn_ids = [pid for pid in ("ParamAngleX", "ParamAngleY", "ParamAngleZ") if pid in pmap]
-    child_ids = set(head_ids) | neck_ids
-    use_warp = bool(head_ids and turn_ids and child_ids)
-    gx0 = gy0 = 0.0; gw = gh = 1.0
-
-    def to_child(x, y):                                    # emitter space -> grid-local [0,1]
-        return ((x - gx0) / gw, (y - gy0) / gh)
+    use_warp = bool(head_ids and turn_ids)
+    warp_child_conv = {}                                   # mesh id -> (emitter x,y) -> grid-local [0,1]
+    fixed_turn_ids = (set(head_ids) | neck_ids) if use_warp else set()  # parts whose turn is NOT baked
 
     if use_warp:
-        _verts = [v for p, m in _dm if p.id in child_ids for v in m.vertices]
-        _xs = [v[0] for v in _verts]; _ys = [v[1] for v in _verts]
-        gx0, gx1, gy0, gy1 = min(_xs), max(_xs), min(_ys), max(_ys)
-        _mx = (gx1 - gx0) * 0.12 + 1e-3; _my = (gy1 - gy0) * 0.12 + 1e-3   # margin: children stay inside
-        gx0 -= _mx; gx1 += _mx; gy0 -= _my; gy1 += _my
-        gw = (gx1 - gx0) or 1e-6; gh = (gy1 - gy0) or 1e-6
-        # vertical weight: 1 over the WHOLE head (incl. the full face, so it never shears/chops), then
-        # ramp ONLY across the exposed neck (chin -> shoulder), 0 over the body. The ramp must start at
-        # the CHIN (face's body-side edge), NOT the top of the neck part (which sits up inside the face
-        # and would shear the lower face — that was the "chopped face"). Orientation-agnostic via _dir.
+        # ONE head-group deformer (face + ALL hair + eyes + accessories), driven by a pseudo-3D SQUASH+roll
+        # about the NECK BASE — the nijilive / inochi2d head model. The head stays anchored at the neck, so
+        # the NECK NEVER MOVES (it is not a child of any turn deformer and its turn keyforms aren't baked).
+        # Earlier we translated the head, which dragged the pinned neck into a rubber stretch and pulled the
+        # lower hair with it. Squash-about-pivot keeps the whole head (hair included) turning in place.
         _hair = {_SR.hair_front, _SR.hair_side, _SR.hair_back, _SR.accessory}
         _fys = [v[1] for p, m in _dm if p.id in head_ids and p.semantic_role not in _hair for v in m.vertices]
-        _fref = sum(_fys) / len(_fys) if _fys else (gy0 + gy1) / 2
+        _fref = sum(_fys) / len(_fys) if _fys else 0.5
         _bys = [v[1] for p, m in _dm if p.id not in head_ids and p.id not in neck_ids for v in m.vertices]
         _bref = sum(_bys) / len(_bys) if _bys else _fref + 1.0
         _dir = 1.0 if _bref >= _fref else -1.0                          # +1 if body is at larger y
-        _chin = max(_fys) if _dir > 0 else min(_fys)                    # face edge toward the body
-        _nys = [v[1] for p, m in _dm if p.id in neck_ids for v in m.vertices]
-        if _nys:
-            _shldr = max(_nys) if _dir > 0 else min(_nys)              # neck edge toward the body
-        else:
-            _shldr = _chin + _dir * (gy1 - gy0) * 0.12
-        _ntop = _chin                                                   # ramp starts at the chin
-        _wspan = (_ntop - _shldr) or 1e-6
-        _pivot = ((gx0 + gx1) / 2, _ntop)
-        ROWS = COLS = 5
-        _rest = [(gx0 + gw * c / COLS, gy0 + gh * r / ROWS)
-                 for r in range(ROWS + 1) for c in range(COLS + 1)]     # row-major, r outer / c inner
+        # Pivot = the head group's base toward the body (where head meets neck), matching preview's
+        # head_pivot. Squash/roll about it leaves the neck-side of the head fixed.
+        _hxs = [v[0] for p, m in _dm if p.id in head_ids for v in m.vertices]
+        _hys = [v[1] for p, m in _dm if p.id in head_ids for v in m.vertices]
+        _pivot = (sum(_hxs) / len(_hxs) if _hxs else 0.5,
+                  (max(_hys) if _dir > 0 else min(_hys)) if _hys else 0.5)
         _kp = [sorted(kf.value for kf in pmap[pid].keyforms) for pid in turn_ids]
         _tot = 1
         for _k in _kp:
             _tot *= len(_k)
-        grid_keyforms = []
-        for _idx in range(_tot):
-            _rem = _idx; fr = {}
-            for _pi, _pid in enumerate(turn_ids):
-                _ki = _rem % len(_kp[_pi]); _rem //= len(_kp[_pi])
-                fr[_pid] = _norm_frac(_pid, _kp[_pi][_ki])
-            sx = fr.get("ParamAngleX", 0.0) * HEAD_SHIFT
-            sy = fr.get("ParamAngleY", 0.0) * HEAD_SHIFT
-            roll = fr.get("ParamAngleZ", 0.0) * HEAD_ROLL
-            cr, sr = math.cos(roll), math.sin(roll)
-            grid = []
-            for (px_, py_) in _rest:
-                w = max(0.0, min(1.0, (py_ - _shldr) / _wspan))
-                dx, dy = px_ - _pivot[0], py_ - _pivot[1]
-                rx = _pivot[0] + (dx * cr - dy * sr) * w + dx * (1 - w) + sx * w   # weighted roll+shift
-                ry = _pivot[1] + (dx * sr + dy * cr) * w + dy * (1 - w) + sy * w
-                grid.append(to_moc(rx, ry))
-            grid_keyforms.append(grid)
+
+        def _emit_warp(warp_id, part_ids, parent_idx):
+            verts = [v for p, m in _dm if p.id in part_ids for v in m.vertices]
+            if not verts:
+                return
+            xs = [v[0] for v in verts]; ys = [v[1] for v in verts]
+            bx0, bx1, by0, by1 = min(xs), max(xs), min(ys), max(ys)
+            mx = (bx1 - bx0) * 0.12 + 1e-3; my = (by1 - by0) * 0.12 + 1e-3   # margin: children stay inside
+            bx0 -= mx; bx1 += mx; by0 -= my; by1 += my
+            bw = (bx1 - bx0) or 1e-6; bh = (by1 - by0) or 1e-6
+            ROWS = COLS = 12                                             # fine grid -> smooth squash
+            rest = [(bx0 + bw * c / COLS, by0 + bh * r / ROWS)
+                    for r in range(ROWS + 1) for c in range(COLS + 1)]   # row-major, r outer / c inner
+            gkfs = []
+            for _idx in range(_tot):
+                _rem = _idx; fr = {}
+                for _pi, _pid in enumerate(turn_ids):
+                    _ki = _rem % len(_kp[_pi]); _rem //= len(_kp[_pi])
+                    fr[_pid] = _norm_frac(_pid, _kp[_pi][_ki])
+                yaw = fr.get("ParamAngleX", 0.0) * HEAD_YAW
+                pitch = fr.get("ParamAngleY", 0.0) * HEAD_PITCH
+                roll = fr.get("ParamAngleZ", 0.0) * HEAD_ROLL
+                cyaw, cpit = math.cos(yaw), math.cos(pitch)             # pseudo-3D squash factors
+                cr, sr = math.cos(roll), math.sin(roll)
+                grid = []
+                for (px_, py_) in rest:
+                    # squash toward the pivot (x by cos(yaw), y by cos(pitch)) then roll about the pivot —
+                    # a pure scale+rotation about the neck base: the head turns in place, size scales
+                    # symmetrically (reads as depth), and the neck-side stays put. NO translation.
+                    dx = (px_ - _pivot[0]) * cyaw
+                    dy = (py_ - _pivot[1]) * cpit
+                    rx = _pivot[0] + dx * cr - dy * sr
+                    ry = _pivot[1] + dx * sr + dy * cr
+                    grid.append(to_moc(rx, ry))
+                gkfs.append(grid)
+            warps.append(EmitWarp(id=warp_id, parent_part_index=parent_idx,
+                                  param_indices=[pidx[pid] for pid in turn_ids],
+                                  rows=ROWS, columns=COLS, keyforms=gkfs, child_ids=set(part_ids)))
+            for cid in part_ids:
+                warp_child_conv[cid] = (lambda x, y, _bx0=bx0, _by0=by0, _bw=bw, _bh=bh:
+                                        ((x - _bx0) / _bw, (y - _by0) / _bh))
+
         _hpi = next((i for i, p in enumerate(drawn) if p.id in head_ids), 0)
-        warps.append(EmitWarp(id="D_HEAD", parent_part_index=_hpi,
-                              param_indices=[pidx[pid] for pid in turn_ids],
-                              rows=ROWS, columns=COLS, keyforms=grid_keyforms, child_ids=child_ids))
+        _emit_warp("D_HEAD", set(head_ids), _hpi)      # head + hair + eyes turn as one; neck stays fixed
 
     meshes = []
     for part_index, part in enumerate(drawn):
         mesh = rig.mesh_for(part.id)
         nv = len(mesh.vertices)
-        is_child = use_warp and part.id in child_ids      # child of the warp -> grid-local [0,1] coords
+        is_child = use_warp and part.id in warp_child_conv   # child of a warp -> grid-local [0,1] coords
         affecting = _affecting_params(rig, part.id)       # face-feature keyforms (head turn = deformer)
+        if part.id in fixed_turn_ids:
+            # Head parts get the turn from the D_HEAD warp; the neck must stay FIXED under head-turn (it is
+            # not a turn deformer child). Either way, do NOT bake ParamAngleX/Y/Z into this mesh's keyforms:
+            # for head parts that would double-apply the turn (scale/shear), and for the neck it would make
+            # it move when it shouldn't. Keep only the mesh's OTHER params (blink, mouth, brows, gaze, ...).
+            affecting = [p for p in affecting if p.id not in turn_ids]
+        # Lay out the keyform grid + binding in CANONICAL (ascending param-index) order. Selection above
+        # is by magnitude (keeps the strongest params under the cap); the ORDER here must be canonical
+        # because the native Cubism Viewer indexes a drawable's keyform grid by ascending parameter order,
+        # NOT the order params are listed in the binding. Emitting a magnitude-scrambled order transposes
+        # the grid axes for multi-param meshes (arms/legs, 6 params) -> they read the wrong keyform cell
+        # and scatter in Cubism Viewer, while the web Cubism Core (which follows the listed order) still
+        # renders them assembled — that core/Viewer split is exactly what this ordering bug looks like.
+        affecting = sorted(affecting, key=lambda p: pidx[p.id])
         dropped = sum(1 for p in rig.parameters
                       if any(any(dx or dy for dx, dy in kf.mesh_offsets.get(part.id, []))
                              for kf in p.keyforms)) - len(affecting)
@@ -471,7 +517,7 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 ki = rem % len(keys_per[pi]); rem //= len(keys_per[pi])
                 for j, (dx, dy) in enumerate(_offset_at(p, keys_per[pi][ki], part.id, nv)):
                     pos[j][0] += dx; pos[j][1] += dy
-            conv = to_child if is_child else to_moc
+            conv = warp_child_conv[part.id] if is_child else to_moc
             keyforms.append([conv(x, y) for x, y in pos])
 
         if atlas_uv is not None and part.id in atlas_uv:
@@ -481,12 +527,14 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         else:
             uvs = [(u, v) for u, v in mesh.uvs]
             texture_no = tex_ids.index(part.texture_id)
-        # Cubism moc3 UVs use the GL texture convention: v=0 at the texture BOTTOM. Our atlas (PIL) and
-        # mesh UVs are authored v-down (v=0 at the top), so we flip to (u, 1-v) on emit. Verified through
-        # the official Cubism Core with SDK-style top-origin sampling (UNPACK_FLIP_Y off): raw UVs render
-        # fully BLANK, (1-v) renders the complete character correctly. (A brief "raw UVs" experiment last
-        # cycle was wrong — an unfaithful headless flip-test had masked the true runtime behaviour.)
-        uvs = [(u, 1.0 - v) for u, v in uvs]
+        # UVs are emitted RAW (v-down, v=0 at the top) to match the atlas: build_atlas (PIL) packs part
+        # content into the TOP of the atlas and produces v-down cell coords, so a part's content lives at
+        # low v. The real Cubism Viewer samples textures top-origin, so raw UVs land on the content.
+        # DETERMINISTIC CHECK (renderer-independent): the atlas opaque region and the emitted UV v-range
+        # must OVERLAP. A `(u, 1-v)` flip pushed UVs to v∈[0.87,1.0] while content sits at v∈[0.0,0.13];
+        # they don't overlap → every part samples the empty bottom → the whole model renders blank in
+        # Cubism Viewer. (An earlier headless "oracle" flipped V the opposite way from the real Viewer and
+        # sent us in a circle — trust the atlas-vs-UV overlap, not that oracle.)
         meshes.append(EmitMesh(
             id=part.id, part_index=part_index, texture_no=texture_no,
             uvs=uvs, triangles=[tuple(t) for t in mesh.triangles],

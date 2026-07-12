@@ -1,18 +1,21 @@
-"""IRR -> ``.moc3`` binary — the **gated seam** of Route A.
+"""IRR -> ``.moc3`` binary — the ``MocWriter`` seam of Route A.
 
-``.moc3`` is the only closed file in a Live2D model and **cannot be generated from scratch** (the
-Cubism SDK only displays; community RE writers are dead/partial — see docs/RIGGING_DEEP_DIVE.md). The
-viable path is **template-binary mutation** (the CartoonAlive playbook): take a hand-rigged Cubism
-template ``.moc3`` whose part/deformer/parameter layout matches the IRR archetype, then overwrite its
-numeric arrays (vertex positions, deform offsets, parameter keyform values) to fit this character.
+``.moc3`` is the only closed file in a Live2D model. It **can** now be generated **from scratch** —
+the v3 format is fully reverse-engineered and ``moc3_emit.native_moc_writer`` builds a valid file
+directly from the IRR (no Cubism template needed). Generated files load and render a full character in
+Cubism Viewer 5.3 and VTube Studio (see docs/PHASE4B_MOC3_FEASIBILITY.md and the ``moc3-official-
+runtime-conventions`` memory). This supersedes the earlier assumption that a hand-rigged template was
+required; template-binary mutation (the CartoonAlive playbook) remains a *valid alternative* writer but
+is no longer the only path.
 
-That needs two things this repo can't provide headlessly (see Phase 4 task #29):
-  1. a Cubism-authored template ``.moc3`` to mutate, and
-  2. a Live2D publishing license (template mutation is legally gray).
+This module keeps a swappable ``MocWriter`` seam so the caller chooses the strategy:
+  - **from-scratch** (default, headless): inject ``moc3_emit.native_moc_writer`` — no template.
+  - **template mutation**: inject a writer that mutates a Cubism-authored template ``.moc3``.
 
-So this is a swappable seam, exactly like ``decompose`` and the landmark ML detectors: everything
-around it (the open JSON emitters, the bundle assembly) is real and tested; only this call is gated.
-Inject a real ``MocWriter`` once a template + license are in hand.
+The only genuine gate left is **legal**, not technical: authoring/shipping ``.moc3`` needs a Live2D
+publishing license before commercial use (R&D is fine; Route B / nijilive ``.inp`` stays fully clean).
+If no ``MocWriter`` is injected the bundle is written JSON-only and renders the moment a ``.moc3`` is
+supplied.
 """
 
 from __future__ import annotations
@@ -42,6 +45,6 @@ def write_moc3_from_template(
         # from-scratch generation, e.g. moc3_emit.native_moc_writer). Pass the template if we have one.
         return writer(rig, Path(template_path) if template_path is not None else None)
     raise NotImplementedError(
-        "writing .moc3 needs a Cubism template + a MocWriter (template-binary mutation) — see "
-        "docs/PHASE4_PLAN.md §4B / task #29. The other 4 model files are emitted regardless."
+        "no MocWriter injected — pass moc3_emit.native_moc_writer to generate a .moc3 from scratch, "
+        "or a template-mutation writer. The other 4 model files are emitted regardless."
     )

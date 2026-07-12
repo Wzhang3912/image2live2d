@@ -1,7 +1,9 @@
 """IRR -> Live2D model bundle (``.model3.json`` + siblings, and a ``.moc3`` when available).
 
 The four sibling JSON files (model3 / physics3 / motion3 / cdi3) are open and written from the IRR
-unconditionally. The ``.moc3`` itself is the gated piece (``moc3.write_moc3_from_template``): if no
+unconditionally. The ``.moc3`` is produced by an injected ``MocWriter`` (``moc3.write_moc3_from_
+template``): pass ``moc3_emit.native_moc_writer`` to generate it from scratch (no template — the
+default headless path, renders in Cubism Viewer / VTube Studio), or a template-mutation writer. If no
 ``MocWriter`` is injected, the bundle is written **JSON-only** — every reference is in place and the
 model renders the moment a ``.moc3`` is dropped in (or a writer is supplied). ``emit`` returns the
 ``.model3.json`` path (what a Live2D runtime loads).

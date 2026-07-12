@@ -13,10 +13,12 @@ from ..types import LayerStack
 from ...irr.schema import Parameter, PhysicsModel, PhysicsRig
 
 # output param -> (mass, drag, length): back hair is heavier/slower, front fringe lighter/snappier.
+# Tuned for VISIBLE secondary motion (the hair reads as "alive"): higher mass -> more lag behind the head,
+# lower drag -> the strand keeps swinging and settles slowly (follow-through), longer length -> bigger arc.
 _HAIR_TUNING: dict[str, tuple[float, float, float]] = {
-    "ParamHairFront": (0.8, 0.25, 0.8),
-    "ParamHairSide": (1.0, 0.2, 1.0),
-    "ParamHairBack": (1.4, 0.15, 1.3),
+    "ParamHairFront": (1.1, 0.10, 1.05),   # light fringe: quick to react but with a visible settle
+    "ParamHairSide": (1.4, 0.08, 1.30),
+    "ParamHairBack": (2.0, 0.06, 1.70),    # heavy back hair: big, slow, long-settling swing
 }
 _HEAD_DRIVER = "ParamAngleX"  # head turn drives hair sway
 

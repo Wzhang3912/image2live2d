@@ -89,7 +89,9 @@ FIELDS: list[tuple[str, str, str, str]] = [
     ("artMeshes", "parentPartIndices", "s32", "artMeshes"),
     ("artMeshes", "parentDeformerIndices", "s32", "artMeshes"),
     ("artMeshes", "textureNos", "u32", "artMeshes"),
-    ("artMeshes", "drawableFlags", "u32", "artMeshes"),
+    ("artMeshes", "drawableFlags", "u8", "artMeshes"),   # 1-BYTE bitfield (blendMode:2,doubleSided:1,
+    #   inverted:1) — NOT u32. Writing it as u32 makes the runtime read 1 byte/drawable, so only every
+    #   4th drawable keeps its doubleSided bit; the rest get back-face-culled (parts vanish in the Viewer).
     ("artMeshes", "vertexCounts", "s32", "artMeshes"),
     ("artMeshes", "uvSourcesBeginIndices", "s32", "artMeshes"),
     ("artMeshes", "positionIndexSourcesBeginIndices", "s32", "artMeshes"),
@@ -168,7 +170,7 @@ FIELDS: list[tuple[str, str, str, str]] = [
     ("glueKeyforms", "intensities", "f32", "glueKeyforms"),
 ]
 
-_ELEM_SIZE = {"id": 64, "s32": 4, "u32": 4, "f32": 4, "s16": 2, "xy": 8, "uv": 8}
+_ELEM_SIZE = {"id": 64, "s32": 4, "u32": 4, "f32": 4, "s16": 2, "u8": 1, "xy": 8, "uv": 8}
 
 
 def _n_elems(kind: str, count: int) -> int:
@@ -230,6 +232,8 @@ def _read_array(data: bytes, ptr: int, kind: str, n: int, end: str):
     if kind == "id":
         return [data[ptr + 64 * i: ptr + 64 * i + 64].split(b"\0", 1)[0].decode("ascii", "replace")
                 for i in range(n)]
+    if kind == "u8":
+        return list(struct.unpack_from(f"{n}B", data, ptr))
     if kind == "s16":
         return list(struct.unpack_from(end + f"{n}h", data, ptr))
     if kind == "s32":
@@ -262,12 +266,12 @@ def write_moc3(moc: Moc3) -> bytes:
 
     ptrs: list[int] = []
 
-    def align(a: int = 8):   # PurismCore/Cubism require every section 8-byte aligned
-        while len(buf) % a:
-            buf.append(0)
+    def align(a: int = 64):  # Cubism lays every data section on a 64-byte boundary (verified vs Haru:
+        while len(buf) % a:  # 95/99 sections 64-aligned; keyform-position bases MUST be 64-aligned so
+            buf.append(0)    # the runtime's SIMD keyform stride (align8(vc) pairs) lands correctly)
 
     def emit_array(kind: str, values) -> int:
-        align(8)
+        align()
         off = len(buf)
         if kind == "rt":
             buf.extend(values if values else b"")
@@ -275,6 +279,8 @@ def write_moc3(moc: Moc3) -> bytes:
             for s in values:
                 b = s.encode("ascii")[:63]
                 buf.extend(b + b"\0" * (64 - len(b)))
+        elif kind == "u8":
+            buf.extend(struct.pack(f"{len(values)}B", *values))
         elif kind == "s16":
             buf.extend(struct.pack(end + f"{len(values)}h", *values))
         elif kind == "s32":
@@ -291,11 +297,11 @@ def write_moc3(moc: Moc3) -> bytes:
         return off
 
     # count info + canvas
-    align(8)
+    align()
     count_off = len(buf)
     buf.extend(struct.pack(end + f"{len(COUNT_KEYS)}I", *[moc.counts[k] for k in COUNT_KEYS]))
     buf.extend(b"\0" * (128 - len(COUNT_KEYS) * 4))       # count table region padded to 128B
-    align(8)
+    align()
     canvas_off = len(buf)
     buf.extend(struct.pack(end + "5f", moc.canvas["pixelsPerUnit"], moc.canvas["originX"],
                            moc.canvas["originY"], moc.canvas["width"], moc.canvas["height"]))
@@ -307,7 +313,7 @@ def write_moc3(moc: Moc3) -> bytes:
         values = moc.sections.get(section, {}).get(field, b"" if kind == "rt" else [])
         n = _n_elems(kind, moc.counts[ckey])
         if n == 0:
-            align(8)                       # empty sections still need a monotonic, aligned offset
+            align()                       # empty sections still need a monotonic, aligned offset
             ptrs.append(len(buf))          # (PurismCore rejects off=0 after a later section)
             continue
         ptrs.append(emit_array(kind, values))

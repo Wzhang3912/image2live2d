@@ -43,6 +43,16 @@ def _vertices(mass: float, drag: float, length: float) -> list[dict]:
     ]
 
 
+def _input_type(param_id: str) -> str:
+    """Cubism physics Input type for a driver param: roll (…Z) rotates the anchor ("Angle"); horizontal
+    (…X) and vertical (…Y) turns TRANSLATE it ("X"/"Y") — translation is what actually swings a strand."""
+    if param_id.endswith("Z"):
+        return "Angle"
+    if param_id.endswith("Y"):
+        return "Y"
+    return "X"
+
+
 def physics3(rig: Rig) -> dict:
     """Build the ``.physics3.json`` document for ``rig`` (empty settings if it has no physics)."""
     settings: list[dict] = []
@@ -55,16 +65,22 @@ def physics3(rig: Rig) -> dict:
         total_vertices += len(verts)
         settings.append({
             "Id": setting_id,
-            # one Input per driver (primary + extras) so all driving motion excites the pendulum
+            # one Input per driver (primary + extras) so all driving motion excites the pendulum.
+            # Input TYPE is critical: X/Y angle params TRANSLATE the pendulum anchor (Type "X"/"Y"), which
+            # actually swings a hanging strand; only roll (…Z) ROTATES it (Type "Angle"). Emitting "Angle"
+            # for everything (the old bug) rotated the anchor instead of moving it -> the pendulum was
+            # barely excited and the hair never visibly swung. Convention verified against Hiyori.
             "Input": [
                 {"Source": {"Target": "Parameter", "Id": d}, "Weight": _INPUT_WEIGHT,
-                 "Type": "Angle", "Reflect": False}
+                 "Type": _input_type(d), "Reflect": False}
                 for d in ph.all_drivers()
             ],
             "Output": [{
                 "Destination": {"Target": "Parameter", "Id": ph.output_param},
                 "VertexIndex": len(verts),  # 1-based: the swinging tip drives the output
-                "Scale": 1.0,
+                # Hair gets a higher output scale so the physics swing reaches a visibly larger sway (more
+                # "alive"); cloth/skirt stays at unity to avoid over-driving the fabric.
+                "Scale": 1.4 if ph.output_param.startswith("ParamHair") else 1.0,
                 "Weight": _OUTPUT_WEIGHT,
                 "Type": "Angle",
                 "Reflect": False,

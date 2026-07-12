@@ -1,0 +1,56 @@
+name: CI
+
+# Gate every push to main and every pull request on the full test suite. A rig/codec change that
+# breaks blink, mouth, head-turn, physics, the IRR, or the .moc3 emitter/codec fails here before merge.
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: tests (py${{ matrix.python-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.12"]   # declared floor + a current release
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+
+      # Editable install + the light optional deps the tests actually use (Pillow / numpy / psd-tools).
+      # The heavy ML extras (torch, opencv, rembg, triangle) are NOT installed: no test requires them —
+      # those code paths are gated seams that skip when the dep is absent.
+      - name: Install
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev,app]" numpy
+
+      # PYTHONPATH=src is belt-and-suspenders next to the editable install so `import image2live2d`
+      # always resolves. Real .moc3 reference models are copyrighted and absent in CI, so
+      # test_moc3_roundtrip / the real-sample codec test auto-skip (they never need shipped assets).
+      - name: Run tests
+        run: PYTHONPATH=src python -m pytest -q
+
+  lint:
+    name: lint (ruff, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true   # advisory only — style never blocks a rig fix from merging
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - run: pip install ruff
+      - run: ruff check src tests

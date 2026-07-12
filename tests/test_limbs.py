@@ -14,8 +14,7 @@ pytest.importorskip("numpy")
 
 from PIL import Image
 
-from image2live2d.core import decompose
-from image2live2d.core.decompose import _limb_split
+from image2live2d.core.decompose.sources import _limb_split
 from image2live2d.core.landmark import Landmarks
 from image2live2d.core.mesh import grid_mesh
 from image2live2d.core.rig import author_rig, select_template
@@ -131,7 +130,7 @@ def test_bend_only_moves_its_own_limb_and_lower_segment():
 def test_limb_params_exempt_from_deform_cap():
     # the generic backstop clamps ordinary params but must leave limb swing/bend alone (a long limb's
     # wrist can legitimately travel past the cap; each limb is bounded by its own degree limit instead)
-    from image2live2d.core.rig import _cap_offsets
+    from image2live2d.core.rig.author import _cap_offsets
     from image2live2d.irr.schema import Keyform
     from image2live2d.irr.params import make_parameter
 

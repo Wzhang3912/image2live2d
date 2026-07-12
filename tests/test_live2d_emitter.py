@@ -77,7 +77,7 @@ def test_motion3_curves_and_counts():
         assert curve["Target"] == "Parameter" and curve["Id"] == lane.param_id
         assert len(curve["Segments"]) >= 2
     # segment count == sum(keyframes-1)
-    assert doc["Meta"]["TotalSegmentCount"] == sum(len(l.keyframes) - 1 for l in anim.lanes)
+    assert doc["Meta"]["TotalSegmentCount"] == sum(len(ln.keyframes) - 1 for ln in anim.lanes)
 
 
 def test_motion3_cubic_emits_bezier_segments():

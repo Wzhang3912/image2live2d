@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from image2live2d.core.landmark import EyeLandmarks, Landmarks, MouthLandmarks, Oval
+from image2live2d.core.landmark import EyeLandmarks, Landmarks, MouthLandmarks
 from image2live2d.core.mesh import grid_mesh
 from image2live2d.core.rig import author_rig, select_template
 from image2live2d.core.types import Layer, LayerStack
@@ -44,7 +44,7 @@ def test_head_turn_bounded_and_pivot_anchored_on_huge_silhouette():
     """A head group inflated by floor-length hair must not fling on turn: the warp is uniform-scaled
     to <= _TURN_CAP and the pivot is anchored (the face barely translates). Regression for the edge
     cases where the head slid off the body on look L/R."""
-    from image2live2d.core.rig import _TURN_CAP
+    from image2live2d.core.rig.author import _TURN_CAP
     parts = [("face_base", R.face_base, (0.42, 0.78, 0.58, 0.95)),   # small face up top
              ("hair_back", R.hair_back, (0.30, 0.02, 0.70, 0.97))]    # huge hair -> inflated bbox
     stack, meshes = _stack_and_meshes(parts)
@@ -56,7 +56,7 @@ def test_head_turn_bounded_and_pivot_anchored_on_huge_silhouette():
 def test_mouth_open_bounded_on_tall_mesh():
     """Mouth-open drop scales with mesh height; an oversized See-through mouth layer must still be
     capped to _MOUTH_CAP rather than dropping a vertex across the canvas."""
-    from image2live2d.core.rig import _MOUTH_CAP
+    from image2live2d.core.rig.author import _MOUTH_CAP
     parts = [("face_base", R.face_base, (0.2, 0.5, 0.8, 0.95)),
              ("mouth", R.mouth, (0.35, 0.20, 0.65, 0.55))]            # absurdly tall mouth layer
     stack, meshes = _stack_and_meshes(parts)

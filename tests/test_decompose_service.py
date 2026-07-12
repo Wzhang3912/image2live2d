@@ -55,7 +55,7 @@ def test_from_service_async_job_flow(tmp_path, monkeypatch):
         captured["psd"] = Path(psd_path)
         return sentinel
 
-    monkeypatch.setattr(decompose, "from_psd", fake_from_psd)
+    monkeypatch.setattr("image2live2d.core.decompose.sources.from_psd", fake_from_psd)
 
     stack = decompose.from_service(img, "http://svc:8000/", tmp_path / "w",
                                    token="secret", poll_interval=0.0)
@@ -85,7 +85,8 @@ def test_from_service_retries_when_service_drops_the_job(tmp_path, monkeypatch):
     """If the service restarts and loses the job (404 'unknown job id'), the client re-submits and
     succeeds. Regression for the auto-managed GPU cold-start where a fresh service settles once."""
     import io
-    img = tmp_path / "hero.png"; img.write_bytes(b"IMG")
+    img = tmp_path / "hero.png"
+    img.write_bytes(b"IMG")
     seen = {"submits": 0}
 
     def fake_urlopen(req, timeout=None):
@@ -103,7 +104,7 @@ def test_from_service_retries_when_service_drops_the_job(tmp_path, monkeypatch):
         raise AssertionError(f"unexpected {method} {url}")
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
-    monkeypatch.setattr(decompose, "from_psd",
+    monkeypatch.setattr("image2live2d.core.decompose.sources.from_psd",
                         lambda psd_path, work, role_map=None: LayerStack(layers=[], canvas_width=1, canvas_height=1))
     decompose.from_service(img, "http://svc:8000", tmp_path / "w", poll_interval=0.0)  # must not raise
     assert seen["submits"] == 2  # re-submitted once after the 404

@@ -1,0 +1,763 @@
+"""Stage 4 — Rig authoring. The hard part: turn layers+meshes into deformers + parameters.
+
+Approach = **template-retargeting** (CartoonAlive's proven playbook). The base rung of the quality
+ladder is **template-transfer**: for each standard Live2D parameter we synthesize keyforms by
+applying a canonical deformation to whichever parts are present, scaled to each part's own mesh
+bounding box.
+
+The Phase 3 rung is **landmark-corrected** (``landmarks`` argument): when per-character landmarks are
+available (from ``core.landmark.extract_landmarks``), deformations fit *this* character instead of a
+generic bbox — head turn pivots on the real face oval, blink collapses along the true lid line, the
+mouth keys off real corners, pupils travel within the real eye, and limbs rotate about real joints.
+Every landmark feature degrades gracefully: absent landmarks fall back to the bbox heuristics, so the
+function works with ``landmarks=None``.
+
+What we author for a portrait:
+* ``ParamEyeLOpen`` / ``ParamEyeROpen`` — blink (collapse the eye group toward its centre line).
+* ``ParamMouthOpenY`` — drop the lower mouth vertices.
+* ``ParamAngleX`` / ``ParamAngleY`` — head turn via a single **shared pseudo-3D spherical warp**
+  applied coherently to every head vertex (features near the turn axis shift most; the receding
+  edge foreshortens). This is the effect a Live2D warp deformer produces, baked into keyforms so it
+  stays backend-neutral instead of relying on a nijilive-specific deformer node.
+* ``ParamAngleZ`` — head tilt via rigid rotation about the head centre.
+* ``ParamEyeBallX`` / ``ParamEyeBallY`` — pupil look (translate pupils).
+* ``ParamBrowLY`` / ``ParamBrowRY`` — brow raise.
+
+Motion is baked as per-vertex mesh offsets in keyforms (no warp/rotation deformers yet), which keeps
+the MVP backend-agnostic. ``deformers`` is therefore empty for now.
+"""
+
+from __future__ import annotations
+
+import math
+from collections import defaultdict
+from dataclasses import dataclass
+
+from ..landmark import Landmarks
+from ..types import LayerStack
+from ...irr.params import make_parameter
+from ...irr.schema import Deformer, Keyform, Mesh, Parameter, SemanticRole, Vec2
+
+# --------------------------------------------------------------------------------------------------
+# Template selection
+# --------------------------------------------------------------------------------------------------
+
+
+@dataclass
+class Template:
+    """A hand-rigged base rig (authored once in nijigenerate) used as a fitting target. For the
+    template-transfer MVP the deformation logic lives in code, so ``path`` is nominal."""
+
+    name: str
+    path: str
+
+
+def select_template(stack: LayerStack) -> Template:
+    """Classify the input and pick the closest archetype template.
+
+    Heuristic over which semantic parts are present: limbs/torso -> a full-body archetype, otherwise
+    a portrait. author_rig adapts to whatever parts exist via presence-gating, so the archetype is
+    mainly metadata + the future hook for template-specific tuning.
+    """
+    roles = {layer.semantic_role for layer in stack.layers}
+    if roles & {SemanticRole.leg_l, SemanticRole.leg_r}:
+        name = "fullbody"
+    elif roles & {SemanticRole.torso, SemanticRole.arm_l, SemanticRole.arm_r}:
+        name = "halfbody"
+    else:
+        name = "portrait_front"
+    return Template(name=name, path=f"templates/{name}.inx")
+
+
+def detect_landmarks(stack: LayerStack) -> dict[str, tuple[float, float]]:
+    """Detect anime-face landmarks (and body pose, later) in model space.
+
+    TODO(phase2): anime face landmark model to drive landmark-corrected keyforms. The
+    template-transfer MVP in ``author_rig`` does not require this.
+    """
+    raise NotImplementedError("rig.detect_landmarks")
+
+
+# --------------------------------------------------------------------------------------------------
+# Authoring
+# --------------------------------------------------------------------------------------------------
+
+_HEAD_ROLES = {
+    SemanticRole.face_base, SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back,
+    SemanticRole.eyebrow_l, SemanticRole.eyebrow_r, SemanticRole.eye_l, SemanticRole.eye_r,
+    SemanticRole.eye_white_l, SemanticRole.eye_white_r, SemanticRole.pupil_l, SemanticRole.pupil_r,
+    SemanticRole.nose, SemanticRole.mouth, SemanticRole.ear_l, SemanticRole.ear_r,
+    SemanticRole.blush,
+}
+
+_BODY_ROLES = {
+    SemanticRole.neck, SemanticRole.torso, SemanticRole.arm_l, SemanticRole.arm_r,
+    SemanticRole.hand_l, SemanticRole.hand_r, SemanticRole.leg_l, SemanticRole.leg_r,
+    SemanticRole.clothing,
+}
+
+# Magnitudes at the extreme parameter value.
+_YAW_MAX = math.radians(26.0)    # ParamAngleX rotation of the head sphere at its extreme
+_PITCH_MAX = math.radians(20.0)  # ParamAngleY rotation of the head sphere at its extreme
+_ANGLE_Z_DEG = 12.0   # head tilt degrees at its extreme
+_BODY_TURN_X = math.radians(8.0)  # body sway at its extreme (range +-10)
+_BODY_TURN_Y = math.radians(6.0)
+_BODY_Z_DEG = 6.0     # body lean degrees at its extreme
+_HAIR_SWAY = 0.22     # hair-tip swing as fraction of strand length at +-1 (roots stay) — gentle so
+#                       hair reads as attached to the head, not flying off it
+_CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
+_EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
+_BROW_FRAC = 0.4      # brow shift as fraction of brow bbox height at +-1
+_MOUTH_OPEN = 0.7     # lower-lip drop as fraction of mouth bbox height at 1
+_MOUTH_FORM = 0.35    # corner raise/lower as fraction of mouth height at +-1
+_BLINK = 1.0          # full collapse at 0
+
+# Absolute displacement caps (model units, canvas ~= 1.0) that bound runaway warps on pathological
+# silhouettes — far below QA's 0.6 runaway gate, far above normal motion (head-turn ~0.14, mouth
+# ~0.05), so well-formed characters are untouched. See edge-case limit report (2026-06-30):
+#  * head turn flew off on an asymmetric/occluded silhouette and on floor-length hair (huge head bbox)
+#  * mouth-open scaled by an over-measured mouth-layer height (See-through mouths cover a big region)
+_TURN_CAP = 0.25      # max per-vertex head/body-turn shift (uniform-scaled to preserve the warp shape)
+_MOUTH_CAP = 0.10     # max per-vertex mouth open/form shift (a mouth never needs more)
+_FOOTWEAR_TOP_Y = 0.28  # a clothing part whose top is below this (model y-up) sits entirely at the
+#                         feet -> it's footwear (shoes/socks), excluded from the skirt hem physics
+_CLOTH_HEM_MIN_Y = 0.20  # "bundled skirt+legs": a clothing part that starts at/above the waist AND
+_CLOTH_WAIST_Y = 0.45    # reaches down into the feet region spans the whole lower body (See-through
+#                          often fuses skirt+legs) -> swinging its hem swings the legs off the feet,
+#                          so it's excluded from skirt physics (a normal/short skirt ends above this)
+_DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more than this. Bounds the
+#                       remaining magnitude runaways (blink/hair/cloth/brow) when See-through emits an
+#                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
+_BREATH_SHIFT = 0.012 # whole-character upward bob (model units) at breath 1
+_ARM_DEG = 14.0       # arm swing degrees about the shoulder joint at the extreme
+_LEG_DEG = 8.0        # leg swing degrees about the hip joint at the extreme
+_ELBOW_DEG = 32.0     # forearm bend about the elbow at the extreme (lower segment ramps in)
+_KNEE_DEG = 26.0      # lower-leg bend about the knee at the extreme
+_LIMB_BEND_BAND = 0.35  # fraction of the lower segment over which the bend ramps 0->full (a soft,
+#                         gap-free fold at the joint rather than a hard crease on the continuous mesh)
+
+
+@dataclass
+class RigAuthoring:
+    """Output of the authoring stage: deformers and populated parameters for the IRR."""
+
+    deformers: list[Deformer]
+    parameters: list[Parameter]
+
+
+def author_rig(
+    stack: LayerStack,
+    meshes: list[Mesh],
+    template: Template,
+    landmarks: Landmarks | None = None,
+) -> RigAuthoring:
+    """Synthesize standard-parameter keyforms for the parts present.
+
+    Template-transfer by default; **landmark-corrected** when ``landmarks`` is supplied (each feature
+    falls back to the bbox heuristic if its landmark is missing)."""
+    lm = landmarks or Landmarks()
+    mesh_by_part = {m.part_id: m for m in meshes}
+    parts_by_role: dict[SemanticRole, list[str]] = defaultdict(list)
+    for layer in stack.layers:
+        if layer.id in mesh_by_part:
+            parts_by_role[layer.semantic_role].append(layer.id)
+
+    def members(*roles: SemanticRole) -> list[tuple[str, Mesh]]:
+        out: list[tuple[str, Mesh]] = []
+        for role in roles:
+            for pid in parts_by_role.get(role, []):
+                out.append((pid, mesh_by_part[pid]))
+        return out
+
+    params: list[Parameter] = []
+
+    # --- Blink (per eye group) ------------------------------------------------------------------
+    # Landmark-corrected: collapse the whole eye group toward the true lid axis (eye centroid y) so
+    # lid + white + pupil close together along the real eye line, not each part's own bbox midline.
+    left_eye = members(SemanticRole.eye_l, SemanticRole.eye_white_l, SemanticRole.pupil_l)
+    if left_eye:
+        axis_y = lm.eye_l.center[1] if lm.eye_l else None
+        params.append(_blink("ParamEyeLOpen", left_eye, axis_y=axis_y))
+    right_eye = members(SemanticRole.eye_r, SemanticRole.eye_white_r, SemanticRole.pupil_r)
+    if right_eye:
+        axis_y = lm.eye_r.center[1] if lm.eye_r else None
+        params.append(_blink("ParamEyeROpen", right_eye, axis_y=axis_y))
+
+    # --- Mouth open -----------------------------------------------------------------------------
+    mouth = members(SemanticRole.mouth)
+    if mouth:
+        if lm.mouth and lm.mouth.height > 1e-4:   # ignore a degenerate (collapsed) mouth landmark
+            pivot_y = lm.mouth.center[1]
+            height = max(lm.mouth.height, 1e-6)
+            params.append(_two_pose("ParamMouthOpenY", 0.0, 1.0, mouth,
+                                    lambda m: _drop_below(m, _MOUTH_OPEN, pivot_y, height)))
+        else:
+            params.append(
+                _two_pose("ParamMouthOpenY", 0.0, 1.0, mouth, lambda m: _drop_lower(m, _MOUTH_OPEN))
+            )
+        params.append(_mouth_form("ParamMouthForm", mouth, mouth_lm=lm.mouth))
+
+    # --- Classify accessories as head- vs body-mounted ------------------------------------------
+    # Accessories aren't a fixed head/body role (a hair-bow vs a belt), so bind each to whichever
+    # group its position implies: an ornament sitting in the head region must follow the head turn
+    # (else it floats in place while the head turns away — the classic "detached bow"), while a
+    # waist charm must follow the body. Reference is the FACE bbox expanded upward (headwear sits
+    # above the forehead), NOT the full head bbox, so long back-hair draping to the waist doesn't
+    # capture body accessories.
+    accessories = members(SemanticRole.accessory)
+    head_acc, body_acc = _classify_accessories(accessories, members)
+
+    # --- Head turn (shared spherical warp) & tilt (rotation) ------------------------------------
+    head = members(*_HEAD_ROLES) + head_acc
+    if head:
+        head_meshes = [m for _, m in head]
+        # Pivot on the real face-oval center when we have it (landmark-corrected turn), but ALWAYS
+        # size the sphere to the head union bbox so it contains every head vertex (hair extends well
+        # beyond the face oval; _head_turn's radius is center-relative over this bbox).
+        bbox = _union_bbox(head_meshes)
+        center = lm.face_oval.center if lm.face_oval else _union_center(head_meshes)
+        # No neck follow-through deform: the head is emitted as a **rotation node about its own bottom
+        # pivot** (~the neck junction), so the head swivels *about* the neck and the junction stays put.
+        # The old tapered follow-through was for the flat model where the head turned by deforming (the
+        # neck had to chase the deformed chin); under node rotation it chases a chin the head no longer
+        # occupies and flings the neck top off-screen at pitch/turn extremes. Let the neck stay anchored.
+        params.append(_head_turn("ParamAngleX", head, center, bbox, axis="x", amax=_YAW_MAX))
+        params.append(_head_turn("ParamAngleY", head, center, bbox, axis="y", amax=_PITCH_MAX))
+        params.append(_rotation("ParamAngleZ", head, center, deg=_ANGLE_Z_DEG))
+
+    # --- Pupil look -----------------------------------------------------------------------------
+    # Landmark-corrected: bound travel by the real eye size so pupils stay within the eye.
+    pupils = members(SemanticRole.pupil_l, SemanticRole.pupil_r)
+    if pupils:
+        eye = lm.eye_l or lm.eye_r
+        travel_x = _EYEBALL_FRAC * eye.width if eye else None
+        travel_y = _EYEBALL_FRAC * eye.height if eye else None
+        params.append(_eyeball("ParamEyeBallX", pupils, axis="x", travel=travel_x))
+        params.append(_eyeball("ParamEyeBallY", pupils, axis="y", travel=travel_y))
+
+    # --- Brow raise -----------------------------------------------------------------------------
+    brow_l = members(SemanticRole.eyebrow_l)
+    if brow_l:
+        params.append(_brow("ParamBrowLY", brow_l))
+    brow_r = members(SemanticRole.eyebrow_r)
+    if brow_r:
+        params.append(_brow("ParamBrowRY", brow_r))
+
+    # --- Hair sway (physics OUTPUT params; the physics rig drives these) ------------------------
+    for role, pid in (
+        (SemanticRole.hair_front, "ParamHairFront"),
+        (SemanticRole.hair_side, "ParamHairSide"),
+        (SemanticRole.hair_back, "ParamHairBack"),
+    ):
+        strands = members(role)
+        if strands:
+            params.append(_hair_sway(pid, strands))
+
+    # --- Cloth/skirt hem sway, split into L/C/R zones (physics OUTPUT params) --------------------
+    # Each zone swings a windowed strip of the hem; overlapping triangular windows keep the cloth
+    # continuous. The physics rig drives each zone from the nearest lower-body motion (leg + body).
+    # Exclude FOOTWEAR: See-through maps shoes/socks to `clothing`, and being at the very bottom they'd
+    # be treated as the skirt hem and swing right off the feet. A real skirt reaches up to the waist,
+    # so a clothing part sitting entirely near the floor (top < _FOOTWEAR_TOP_Y) is footwear, not hem.
+    def _skirtable(m):
+        x0, y0, x1, y1 = _bbox(m.vertices)          # y-up: y0=bottom, y1=top
+        if y1 < _FOOTWEAR_TOP_Y:
+            return False                             # footwear (entirely at the feet)
+        if y0 < _CLOTH_HEM_MIN_Y and y1 >= _CLOTH_WAIST_Y:
+            return False                             # skirt+legs bundled (waist -> feet)
+        if y0 >= _CLOTH_WAIST_Y:
+            return False                             # a top/shirt: sits entirely at/above the waist,
+            #                                          so it has no hem to swing — it must ride the body
+            #                                          rigidly, not flap like a skirt (See-through maps
+            #                                          the sailor top to `clothing` too).
+        return True
+    cloth = [(pid, m) for pid, m in members(SemanticRole.clothing) if _skirtable(m)]
+    if cloth:
+        cx0, _, cx1, _ = _union_bbox([m for _, m in cloth])
+        span = max(cx1 - cx0, 1e-6)
+        half_w = span / 3.0  # windows overlap (each ~2/3 span wide) for continuity
+        for pid, center_x in (
+            ("ParamSkirtL", cx0 + span / 6.0),
+            ("ParamSkirtC", (cx0 + cx1) / 2.0),
+            ("ParamSkirtR", cx1 - span / 6.0),
+        ):
+            params.append(_skirt_zone(pid, cloth, center_x=center_x, half_width=half_w))
+
+    # --- Body sway / lean (when a body is present) ----------------------------------------------
+    body = members(*_BODY_ROLES) + body_acc
+    if body:
+        body_meshes = [m for _, m in body]
+        bcenter = _union_center(body_meshes)
+        bbox = _union_bbox(body_meshes)
+        params.append(_head_turn("ParamBodyAngleX", body, bcenter, bbox, axis="x", amax=_BODY_TURN_X))
+        params.append(_head_turn("ParamBodyAngleY", body, bcenter, bbox, axis="y", amax=_BODY_TURN_Y))
+        params.append(_rotation("ParamBodyAngleZ", body, bcenter, deg=_BODY_Z_DEG))
+
+    # --- Limb articulation (arms/legs swing about their joint) -----------------------------------
+    # Needs landmark joints (shoulder/hip = top-center of each limb silhouette). Non-standard params
+    # (ParamArm*/ParamLeg*) — see irr.params. Each limb rotates rigidly about its own joint.
+    for role, swing_id, bend_id, swing_deg, bend_deg in (
+        (SemanticRole.arm_l, "ParamArmLA", "ParamArmLB", _ARM_DEG, _ELBOW_DEG),
+        (SemanticRole.arm_r, "ParamArmRA", "ParamArmRB", _ARM_DEG, _ELBOW_DEG),
+        (SemanticRole.leg_l, "ParamLegLA", "ParamLegLB", _LEG_DEG, _KNEE_DEG),
+        (SemanticRole.leg_r, "ParamLegRA", "ParamLegRB", _LEG_DEG, _KNEE_DEG),
+    ):
+        limb = members(role)
+        joint = lm.joints.get(role.value)                       # shoulder / hip
+        if limb and joint:
+            params.append(_rotation(swing_id, limb, joint, deg=swing_deg))   # whole-limb swing
+        elbow = lm.joints.get(f"{role.value}_mid")              # elbow / knee
+        end = lm.joints.get(f"{role.value}_end")                # wrist / ankle
+        if limb and elbow and end:
+            params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg))  # lower-segment bend
+
+    # --- Breath (subtle whole-character bob) ----------------------------------------------------
+    all_parts = [
+        (layer.id, mesh_by_part[layer.id]) for layer in stack.layers if layer.id in mesh_by_part
+    ]
+    if all_parts:
+        params.append(_breath("ParamBreath", all_parts))
+
+    _cap_offsets(params, _DEFORM_CAP)  # final safety net against magnitude runaways (any param/part)
+    return RigAuthoring(deformers=[], parameters=params)
+
+
+def _cap_offsets(params: list[Parameter], cap: float) -> None:
+    """Clamp every keyform's per-vertex offset magnitude to ``cap`` (in place), preserving direction.
+
+    A blanket backstop so no parameter can fling a vertex across the canvas on a pathological
+    silhouette (e.g. See-through's oversized eye/hair layers -> blink/sway runaway). Well-formed
+    motion is far below ``cap`` and untouched; head-turn and mouth keep their own tighter caps.
+
+    Limb params (ParamArm*/ParamLeg*) are EXEMPT: a full arm/leg swing or an elbow/knee bend
+    legitimately moves the wrist/ankle far more than ``cap`` (that's the whole point), and each is
+    already bounded by its own degree limit."""
+    for p in params:
+        if p.id.startswith("ParamArm") or p.id.startswith("ParamLeg"):
+            continue
+        for kf in p.keyforms:
+            for pid, offs in kf.mesh_offsets.items():
+                kf.mesh_offsets[pid] = [_cap_vec(dx, dy, cap) for dx, dy in offs]
+
+
+def _cap_vec(dx: float, dy: float, cap: float) -> Vec2:
+    mag = math.hypot(dx, dy)
+    if mag > cap:
+        s = cap / mag
+        return (dx * s, dy * s)
+    return (dx, dy)
+
+
+# --------------------------------------------------------------------------------------------------
+# Parameter builders
+# --------------------------------------------------------------------------------------------------
+def _set_keyforms(param_id: str, keyforms: list[Keyform]) -> Parameter:
+    p = make_parameter(param_id)
+    p.keyforms = keyforms
+    return p
+
+
+def _tri(param_id: str, at) -> Parameter:
+    """Build a 3-keyform parameter at [min, default, max] from ``at(sign)`` where sign is -1/0/+1 and
+    ``at(0)`` must yield zero offsets. Keyform values come from the parameter's own catalog range, so
+    this works for ParamAngle* (+-30), ParamBodyAngle* (+-10), and +-1 params alike."""
+    p = make_parameter(param_id)
+    p.keyforms = [
+        Keyform(value=p.min, mesh_offsets=at(-1.0)),
+        Keyform(value=p.default, mesh_offsets=at(0.0)),
+        Keyform(value=p.max, mesh_offsets=at(1.0)),
+    ]
+    return p
+
+
+def _blink(param_id: str, group: list[tuple[str, Mesh]], *, axis_y: float | None = None) -> Parameter:
+    # default (open) = 1.0 -> rest; 0.0 (closed) -> collapse to the lid line.
+    # With a landmark lid axis (axis_y) the whole group collapses toward that shared y; otherwise
+    # each part collapses toward its own bbox midline.
+    open_kf = Keyform(value=1.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
+    if axis_y is None:
+        closed = {pid: _collapse_vertical(m, _BLINK) for pid, m in group}
+    else:
+        closed = {pid: _collapse_to(m, _BLINK, axis_y) for pid, m in group}
+    closed_kf = Keyform(value=0.0, mesh_offsets=closed)
+    return _set_keyforms(param_id, [closed_kf, open_kf])
+
+
+def _two_pose(
+    param_id: str, rest_v: float, active_v: float, group: list[tuple[str, Mesh]], fn
+) -> Parameter:
+    rest = Keyform(value=rest_v, mesh_offsets={pid: _zeros(m) for pid, m in group})
+    active = Keyform(value=active_v, mesh_offsets={pid: fn(m) for pid, m in group})
+    return _set_keyforms(param_id, [rest, active])
+
+
+def _head_turn(
+    param_id: str,
+    head: list[tuple[str, Mesh]],
+    center: Vec2,
+    bbox: tuple[float, float, float, float],
+    *,
+    axis: str,
+    amax: float,
+    neck: list[tuple[str, Mesh]] | None = None,
+) -> Parameter:
+    """A single shared pseudo-3D rotation, baked coherently into every vertex of the group.
+
+    The group is modelled as a sphere centred on it; each vertex's signed offset from centre on the
+    turn axis maps to an angle on that sphere, rotated by ``amax`` at the extreme. Vertices near the
+    axis shift most and the receding edge foreshortens — the look a warp deformer gives, but
+    backend-neutral. One shared centre/radius keeps parts coherent. Used for head (ParamAngleX/Y)
+    and body (ParamBodyAngleX/Y).
+
+    ``neck`` parts (optional) get a **tapered follow-through**: each neck vertex shifts by the head's
+    displacement evaluated at the chin (``cx``, bbox-bottom), scaled by a vertical weight that is 1 at
+    the neck top (so it stays joined to the head) and 0 at the shoulders (so the body still anchors
+    it). Closes the head/neck seam on strong turns without detaching the shoulders. The reference is
+    taken on-sphere (at the chin) so it is exactly zero at rest and never clamps.
+    """
+    cx, cy = center
+    x0, y0, x1, y1 = bbox
+    # Radius must contain every vertex *relative to the pivot center*, so no vertex falls outside the
+    # sphere and gets clamped (which would yank far parts violently). When center is the bbox midpoint
+    # this equals the half-extent; when the pivot is offset (e.g. a landmark face-oval center that sits
+    # away from the parts' midline), the far side governs — keeping the warp bounded and artifact-free.
+    if axis == "x":
+        radius = max(cx - x0, x1 - cx, 1e-6)
+    else:
+        radius = max(cy - y0, y1 - cy, 1e-6)
+
+    if neck:
+        ny0 = min(y for _, m in neck for _, y in m.vertices)
+        ny1 = max(y for _, m in neck for _, y in m.vertices)
+        nspan = max(ny1 - ny0, 1e-6)
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        a = sign * amax
+        # Anchor the pivot: a bare sphere warp shifts the centre itself by radius·sin(a), so the whole
+        # head *slides* — and an asymmetric silhouette or floor-length hair inflates `radius`, sliding
+        # it right off the body. Subtracting the centre's own shift makes the head **rotate in place**
+        # (centre stays put; features foreshorten around it), which is both more natural and removes
+        # the slide that scaled with radius. Zero at rest (a=0 -> sin=0).
+        center_shift = radius * math.sin(a)
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in head:
+            cell: list[Vec2] = []
+            for x, y in m.vertices:
+                if axis == "x":
+                    phi = math.asin(_clamp((x - cx) / radius, -1.0, 1.0))
+                    cell.append((cx + radius * math.sin(phi + a) - x - center_shift, 0.0))
+                else:
+                    psi = math.asin(_clamp((y - cy) / radius, -1.0, 1.0))
+                    cell.append((0.0, cy + radius * math.sin(psi + a) - y - center_shift))
+            offs[pid] = cell
+        if neck:
+            if axis == "x":
+                ref = 0.0                                                    # pivot anchored: no x slide
+            else:
+                psi0 = math.asin(_clamp((y0 - cy) / radius, -1.0, 1.0))
+                ref = cy + radius * math.sin(psi0 + a) - y0 - center_shift   # residual chin dy
+            for pid, m in neck:
+                cell = []
+                for x, y in m.vertices:
+                    w = _clamp((y - ny0) / nspan, 0.0, 1.0)                  # 0 shoulders -> 1 top
+                    cell.append((ref * w, 0.0) if axis == "x" else (0.0, ref * w))
+                offs[pid] = cell
+        # Bound runaway: a head sphere sized to a huge group (long hair) or skewed by an asymmetric
+        # silhouette can fling vertices off. Uniform-scale the whole warp so its largest shift is
+        # <= _TURN_CAP, preserving the warp's shape (relative motion) while capping its magnitude.
+        mx = max((math.hypot(dx, dy) for cell in offs.values() for dx, dy in cell), default=0.0)
+        if mx > _TURN_CAP:
+            s = _TURN_CAP / mx
+            offs = {pid: [(dx * s, dy * s) for dx, dy in cell] for pid, cell in offs.items()}
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _rotation(param_id: str, head: list[tuple[str, Mesh]], center: Vec2, *, deg: float,
+              neck: list[tuple[str, Mesh]] | None = None) -> Parameter:
+    """Rigid roll about ``center`` by ``deg`` at the extreme (ParamAngleZ / ParamBodyAngleZ).
+
+    ``neck`` parts (optional) get a **tapered twist**: each neck vertex rotates about the same centre
+    by ``deg`` scaled by a vertical weight (1 at the neck top → follows the head roll, 0 at the
+    shoulders → stays), so the head stays joined to the neck when it tilts (matching the head-turn
+    neck follow)."""
+    cx, cy = center
+    if neck:
+        ny0 = min(y for _, m in neck for _, y in m.vertices)
+        ny1 = max(y for _, m in neck for _, y in m.vertices)
+        nspan = max(ny1 - ny0, 1e-6)
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        theta = sign * math.radians(deg)
+        offs = {pid: _rotate(m, center, theta) for pid, m in head}
+        if neck:
+            for pid, m in neck:
+                cell = []
+                for x, y in m.vertices:
+                    w = _clamp((y - ny0) / nspan, 0.0, 1.0)
+                    a = theta * w
+                    c, s = math.cos(a), math.sin(a)
+                    rx, ry = x - cx, y - cy
+                    cell.append((cx + rx * c - ry * s - x, cy + rx * s + ry * c - y))
+                offs[pid] = cell
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _limb_bend(param_id: str, limb: list[tuple[str, Mesh]], elbow: Vec2, end: Vec2, *,
+               deg: float) -> Parameter:
+    """Bend the LOWER segment of a limb about its ``elbow``/knee joint (elbow->wrist / knee->ankle).
+
+    Unlike ``_rotation`` (rigid whole-limb swing about the shoulder/hip), this rotates only vertices
+    *below* the joint, by an angle weighted 0 above the joint -> full over the segment. The limb is a
+    single continuous mesh, so a weighted rotation folds it at the joint with **no gap** (splitting it
+    into two rigid cut-outs would tear). ``elbow``/``end`` are model-space (y-up); the ramp runs along
+    the vertical limb axis, which fits a hanging arm/leg."""
+    ex, ey = elbow
+    _, wy = end
+    span = max(ey - wy, 1e-6)                       # elbow(top) -> wrist(bottom), y-up so ey > wy
+    band = max(_LIMB_BEND_BAND * span, 1e-6)
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        theta = sign * math.radians(deg)
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in limb:
+            cell: list[Vec2] = []
+            for x, y in m.vertices:
+                w = _clamp((ey - y) / band, 0.0, 1.0)   # 0 at/above the joint -> 1 down the segment
+                a = theta * w
+                c, s = math.cos(a), math.sin(a)
+                rx, ry = x - ex, y - ey
+                cell.append((ex + rx * c - ry * s - x, ey + rx * s + ry * c - y))
+            offs[pid] = cell
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _hair_sway(param_id: str, group: list[tuple[str, Mesh]], *, amount: float = _HAIR_SWAY) -> Parameter:
+    """Pendulum OUTPUT param: tips/hem swing horizontally, roots (top) stay. The physics rig drives
+    this from head/body motion; it is also a normal driveable parameter. Used for hair and (with a
+    gentler ``amount``) for a skirt hem."""
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in group:
+            _, _, _, top = _bbox(m.vertices)
+            offs[pid] = [(sign * amount * (top - y), 0.0) for _, y in m.vertices]
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _skirt_zone(
+    param_id: str, group: list[tuple[str, Mesh]], *, center_x: float, half_width: float
+) -> Parameter:
+    """One skirt-hem zone OUTPUT param: the hem swings horizontally, weighted by a triangular window
+    centred on ``center_x`` (width ``2*half_width``) so only this zone's strip moves and adjacent
+    zones blend. Roots (top/waist) stay; tips (hem) swing most. Driven by the physics rig from the
+    nearest lower-body motion."""
+    hw = max(half_width, 1e-6)
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in group:
+            _, _, _, top = _bbox(m.vertices)
+            offs[pid] = [
+                (sign * _CLOTH_SWAY * (top - y) * max(0.0, 1.0 - abs(x - center_x) / hw), 0.0)
+                for x, y in m.vertices
+            ]
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _mouth_form(param_id: str, group: list[tuple[str, Mesh]], *, mouth_lm=None) -> Parameter:
+    """Smile/frown: raise the mouth corners at +1, lower them at -1. Vertical offset grows with a
+    vertex's horizontal distance from the mouth centre, so the corners move and the centre stays.
+
+    With a mouth landmark, the centre x and the corner span come from the real corners; otherwise
+    from each part's bbox."""
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in group:
+            if mouth_lm is not None:
+                cx = mouth_lm.center[0]
+                half = max(mouth_lm.width / 2.0, 1e-6)
+                height = max(mouth_lm.height, 1e-6)
+            else:
+                x0, y0, x1, y1 = _bbox(m.vertices)
+                cx = (x0 + x1) / 2.0
+                half = max((x1 - x0) / 2.0, 1e-6)
+                height = y1 - y0
+            offs[pid] = [
+                (0.0, sign * min(_MOUTH_FORM * height * abs(x - cx) / half, _MOUTH_CAP))
+                for x, _ in m.vertices
+            ]
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _breath(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
+    """Subtle breathing: a gentle whole-character upward bob at breath=1 (rest at 0)."""
+    rest = Keyform(value=0.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
+    inhale = Keyform(value=1.0, mesh_offsets={pid: _translate(m, 0.0, _BREATH_SHIFT) for pid, m in group})
+    return _set_keyforms(param_id, [rest, inhale])
+
+
+def _eyeball(
+    param_id: str, pupils: list[tuple[str, Mesh]], *, axis: str, travel: float | None = None
+) -> Parameter:
+    """Pupil look. ``travel`` (model units) is the absolute shift at the extreme; when given (from
+    the real eye size) pupils stay inside the eye. Falls back to a fraction of the pupil bbox when no
+    usable eye size is given — including a *degenerate* (~0) landmark eye, which would otherwise leave
+    the pupils dead (caught by the all-params audit on a character whose eye landmark collapsed)."""
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in pupils:
+            if travel and travel > 1e-6:
+                d = sign * travel
+            else:
+                x0, y0, x1, y1 = _bbox(m.vertices)
+                extent = (x1 - x0) if axis == "x" else (y1 - y0)
+                d = sign * extent * _EYEBALL_FRAC
+            offs[pid] = _translate(m, d if axis == "x" else 0.0, d if axis == "y" else 0.0)
+        return offs
+
+    return _tri(param_id, at)
+
+
+def _brow(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        offs: dict[str, list[Vec2]] = {}
+        for pid, m in group:
+            _, y0, _, y1 = _bbox(m.vertices)
+            offs[pid] = _translate(m, 0.0, sign * (y1 - y0) * _BROW_FRAC)
+        return offs
+
+    return _tri(param_id, at)
+
+
+# --------------------------------------------------------------------------------------------------
+# Geometry primitives — each returns offsets aligned to mesh.vertices order
+# --------------------------------------------------------------------------------------------------
+def _bbox(verts: list[Vec2]) -> tuple[float, float, float, float]:
+    xs = [x for x, _ in verts]
+    ys = [y for _, y in verts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def _zeros(m: Mesh) -> list[Vec2]:
+    return [(0.0, 0.0)] * len(m.vertices)
+
+
+def _translate(m: Mesh, dx: float, dy: float) -> list[Vec2]:
+    return [(dx, dy)] * len(m.vertices)
+
+
+def _collapse_vertical(m: Mesh, amount: float) -> list[Vec2]:
+    _, y0, _, y1 = _bbox(m.vertices)
+    cy = (y0 + y1) / 2.0
+    return [(0.0, (cy - y) * amount) for _, y in m.vertices]
+
+
+def _collapse_to(m: Mesh, amount: float, cy: float) -> list[Vec2]:
+    """Collapse vertices vertically toward a shared line ``cy`` (the landmark lid axis)."""
+    return [(0.0, (cy - y) * amount) for _, y in m.vertices]
+
+
+def _drop_lower(m: Mesh, amount: float) -> list[Vec2]:
+    _, y0, _, y1 = _bbox(m.vertices)
+    cy = (y0 + y1) / 2.0
+    height = y1 - y0
+    span = cy - y0
+    out: list[Vec2] = []
+    for _, y in m.vertices:
+        if y < cy and span > 0:
+            factor = (cy - y) / span
+            out.append((0.0, -min(amount * height * factor, _MOUTH_CAP)))  # cap runaway on tall meshes
+        else:
+            out.append((0.0, 0.0))
+    return out
+
+
+def _drop_below(m: Mesh, amount: float, pivot_y: float, height: float) -> list[Vec2]:
+    """Drop vertices below the landmark lip line ``pivot_y``; deeper vertices drop more, normalized
+    by the real mouth ``height``. Vertices at/above the line stay (the upper lip)."""
+    out: list[Vec2] = []
+    for _, y in m.vertices:
+        if y < pivot_y:
+            factor = min(1.0, (pivot_y - y) / height)
+            out.append((0.0, -min(amount * height * factor, _MOUTH_CAP)))  # cap runaway on tall meshes
+        else:
+            out.append((0.0, 0.0))
+    return out
+
+
+def _rotate(m: Mesh, center: Vec2, theta: float) -> list[Vec2]:
+    cx, cy = center
+    c, s = math.cos(theta), math.sin(theta)
+    out: list[Vec2] = []
+    for x, y in m.vertices:
+        rx, ry = x - cx, y - cy
+        nx = cx + rx * c - ry * s
+        ny = cy + rx * s + ry * c
+        out.append((nx - x, ny - y))
+    return out
+
+
+def _union_bbox(meshes: list[Mesh]) -> tuple[float, float, float, float]:
+    boxes = [_bbox(m.vertices) for m in meshes]
+    return (
+        min(b[0] for b in boxes),
+        min(b[1] for b in boxes),
+        max(b[2] for b in boxes),
+        max(b[3] for b in boxes),
+    )
+
+
+def _union_center(meshes: list[Mesh]) -> Vec2:
+    x0, y0, x1, y1 = _union_bbox(meshes)
+    return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+
+def _classify_accessories(accessories, members):
+    """Split accessory parts into (head_mounted, body_mounted) by nearest attachment.
+
+    Head ornaments must follow the head turn; body accessories must not. An accessory is bound to
+    whichever group (head parts vs body parts) is nearest to its **attachment point** — its top-centre,
+    where ornaments hang from. Using the attachment point (not the centre) is what lets a *dangling*
+    charm/earring, whose body hangs low by the neck but which attaches up at the side hair/ear, bind
+    to the head and turn with it. With no head (or no body) parts present, all accessories fall to the
+    side that exists. Model space is y-up, so the attachment point is (centre-x, max-y)."""
+    if not accessories:
+        return [], []
+    head_ref = [m for _, m in members(*_HEAD_ROLES)]
+    body_ref = [m for _, m in members(*_BODY_ROLES)]
+    if not head_ref:
+        return [], list(accessories)
+    if not body_ref:
+        return list(accessories), []
+    head_acc, body_acc = [], []
+    for pid, m in accessories:
+        x0, _, x1, y1 = _bbox(m.vertices)
+        ap = ((x0 + x1) / 2.0, y1)                       # attachment point: top-centre
+        dh = min(_point_bbox_dist(ap, _bbox(h.vertices)) for h in head_ref)
+        db = min(_point_bbox_dist(ap, _bbox(b.vertices)) for b in body_ref)
+        (head_acc if dh <= db else body_acc).append((pid, m))
+    return head_acc, body_acc
+
+
+def _point_bbox_dist(p: Vec2, box: tuple[float, float, float, float]) -> float:
+    """Euclidean distance from point ``p`` to an axis-aligned bbox (0 if inside)."""
+    px, py = p
+    x0, y0, x1, y1 = box
+    dx = max(x0 - px, 0.0, px - x1)
+    dy = max(y0 - py, 0.0, py - y1)
+    return math.hypot(dx, dy)
+
+
+def _clamp(v: float, lo: float, hi: float) -> float:
+    return lo if v < lo else hi if v > hi else v

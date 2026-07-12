@@ -260,7 +260,6 @@ def write_moc3(moc: Moc3) -> bytes:
     # header (64B)
     buf += MAGIC + bytes([moc.version, 1 if moc.big_endian else 0]) + b"\0" * 58
     # reserve section offset table (0x40..0x2c0) + runtime map (0x2c0..0x740)
-    n_slots = 2 + len(FIELDS)
     buf += b"\0" * (DATA_BASE - len(buf))
     assert len(buf) == DATA_BASE
 

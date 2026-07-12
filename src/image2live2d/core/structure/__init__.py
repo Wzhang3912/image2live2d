@@ -17,6 +17,16 @@ from .dynamics import (
     analyze_stack,
     score_dynamics,
 )
+from .graph import (
+    BODY,
+    BODY_ROLES,
+    HEAD,
+    HEAD_ROLES,
+    RigGraph,
+    RigNode,
+    analyze_structure,
+    build_rig_graph,
+)
 
 __all__ = [
     "AlphaSampler",
@@ -28,4 +38,12 @@ __all__ = [
     "PartDynamics",
     "score_dynamics",
     "analyze_stack",
+    "HEAD",
+    "BODY",
+    "HEAD_ROLES",
+    "BODY_ROLES",
+    "RigNode",
+    "RigGraph",
+    "build_rig_graph",
+    "analyze_structure",
 ]

@@ -7,10 +7,11 @@ pendulum (bigger arc, more follow-through); more fabric → more mass (more lag)
 tuning is the pre-P3 constants, anchored to a reference-sized garment (factor 1.0), so a typical skirt
 keeps today's feel and only unusual garments scale.
 
-The zone *structure* (three overlapping L/C/R windows, their centres/widths, and their lower-body
-drivers) is unchanged, so the authored sway keyforms stay byte-identical; only the physics material is
-geometry-driven. Both ``author_rig`` (windows) and ``generate_physics`` (material) consume this one
-planner so they never drift.
+The zone *count* now scales with hem width (P3b): a reference-width hem keeps the three overlapping
+L/C/R windows (byte-identical), while a markedly wider hem breaks into more evenly-tiled interior lobes
+(``ParamSkirtC1``, ``ParamSkirtC2`` …) so a full skirt ripples in more independent zones. Both
+``author_rig`` (windows) and ``generate_physics`` (material) consume this one planner so they never
+drift.
 """
 
 from __future__ import annotations
@@ -30,14 +31,55 @@ _CLOTH_WAIST_Y = 0.45    # a part sitting entirely at/above this is a top/shirt 
 _REF_HANG = 0.22
 _REF_AREA = 0.09
 
-# Per-zone base: (param id, extra drivers, base (mass, drag, length)) — the pre-P3 _SKIRT_ZONES values.
-# Centre zone is heavier/longer (more fabric hangs there); side zones couple to the near leg.
-_ZONE_BASE: list[tuple[str, list[str], tuple[float, float, float]]] = [
-    ("ParamSkirtL", ["ParamLegLA", "ParamBodyAngleZ"], (1.5, 0.28, 1.3)),
-    ("ParamSkirtC", ["ParamBodyAngleZ", "ParamBodyAngleY"], (1.8, 0.25, 1.5)),
-    ("ParamSkirtR", ["ParamLegRA", "ParamBodyAngleZ"], (1.5, 0.28, 1.3)),
-]
-SKIRT_PARAM_IDS: tuple[str, ...] = tuple(z[0] for z in _ZONE_BASE)
+# Zone *count* scales with hem width (P3b). A reference-width hem (~_REF_SPAN of the canvas) ripples in
+# 3 lobes — the pre-P3b fixed L/C/R; a markedly wider hem breaks into more independent lobes, one extra
+# per ~_SPAN_PER_ZONE of added width, capped at _MAX_ZONES. Exactly 3 zones reproduces the old layout
+# (centres, windows, drivers, material) byte-for-byte, so every reference-width garment is unchanged.
+_REF_SPAN = 0.40        # a typical skirt spans ~40% of the canvas -> 3 zones
+_SPAN_PER_ZONE = 0.16   # each additional ~16% of width adds a hem lobe
+_MAX_ZONES = 7          # cap: even a full-width gown ripples in a bounded number of lobes
+
+# Edge vs interior base tuning + drivers (were the per-zone _SKIRT_ZONES constants). Edge zones couple
+# to the near leg; interior zones carry more fabric (heavier, longer) and couple to body lean/twist.
+_EDGE_BASE = (1.5, 0.28, 1.3)
+_INTERIOR_BASE = (1.8, 0.25, 1.5)
+_EDGE_DRIVERS_L = ["ParamLegLA", "ParamBodyAngleZ"]
+_EDGE_DRIVERS_R = ["ParamLegRA", "ParamBodyAngleZ"]
+_INTERIOR_DRIVERS = ["ParamBodyAngleZ", "ParamBodyAngleY"]
+
+# The base 3 (catalog) ids; wide hems mint extra interior ids (ParamSkirtC1, C2 … — see params.py).
+SKIRT_PARAM_IDS: tuple[str, ...] = ("ParamSkirtL", "ParamSkirtC", "ParamSkirtR")
+
+
+def _interior_param_id(k: int) -> str:
+    """kth interior zone id: first = ``ParamSkirtC`` (so a 3-zone skirt stays byte-identical), extras
+    suffixed ``ParamSkirtC1``, ``ParamSkirtC2`` … (same first-is-base convention as hair strands)."""
+    return "ParamSkirtC" if k == 0 else f"ParamSkirtC{k}"
+
+
+def _zone_count(span: float) -> int:
+    """Number of hem lobes for a garment of horizontal ``span`` (normalized to the canvas). 3 up to the
+    reference width, then +1 per _SPAN_PER_ZONE of extra width, capped — never below 3 (byte-identical)."""
+    if span <= _REF_SPAN:
+        return 3
+    return min(3 + int((span - _REF_SPAN) / _SPAN_PER_ZONE), _MAX_ZONES)
+
+
+def _zone_layout(n: int) -> list[tuple[str, list[str], tuple[float, float, float]]]:
+    """(param id, drivers, base material) for each of ``n`` zones, left→right. The two ends are the leg-
+    coupled edges (L, R); everything between is a body-coupled interior. ``n == 3`` yields exactly the
+    old L / C / R layout."""
+    out: list[tuple[str, list[str], tuple[float, float, float]]] = []
+    interior_k = 0
+    for i in range(n):
+        if i == 0:
+            out.append(("ParamSkirtL", list(_EDGE_DRIVERS_L), _EDGE_BASE))
+        elif i == n - 1:
+            out.append(("ParamSkirtR", list(_EDGE_DRIVERS_R), _EDGE_BASE))
+        else:
+            out.append((_interior_param_id(interior_k), list(_INTERIOR_DRIVERS), _INTERIOR_BASE))
+            interior_k += 1
+    return out
 
 
 @dataclass
@@ -105,8 +147,9 @@ def skirt_cloth(stack: LayerStack, meshes: list[Mesh]) -> list[tuple[str, Mesh]]
 
 
 def skirt_zones(stack: LayerStack, meshes: list[Mesh]) -> list[ZoneSpec]:
-    """Plan the L/C/R hem zones for a garment: unchanged windows + geometry-scaled material. Empty if
-    there is no skirtable cloth."""
+    """Plan the hem zones for a garment: a width-driven zone count (3 for a reference hem, more for a
+    wide one) with evenly-tiled overlapping windows and geometry-scaled material. Empty if there is no
+    skirtable cloth. A 3-zone (reference-width) garment reproduces the old L/C/R layout exactly."""
     cloth = skirt_cloth(stack, meshes)
     if not cloth:
         return []
@@ -116,12 +159,13 @@ def skirt_zones(stack: LayerStack, meshes: list[Mesh]) -> list[ZoneSpec]:
     cy0 = min(b[1] for b in boxes)
     cy1 = max(b[3] for b in boxes)
     span = max(cx1 - cx0, 1e-6)
-    half_w = span / 3.0                      # overlapping windows (each ~2/3 span) for continuity
     hang = cy1 - cy0
     area = span * hang
-    centers = (cx0 + span / 6.0, (cx0 + cx1) / 2.0, cx1 - span / 6.0)
+    n = _zone_count(span)
+    half_w = span / n                        # overlapping windows (each 2*span/n wide) for continuity
     zones: list[ZoneSpec] = []
-    for (pid, drivers, base), center_x in zip(_ZONE_BASE, centers):
+    for i, (pid, drivers, base) in enumerate(_zone_layout(n)):
+        center_x = cx0 + span * (i + 0.5) / n
         mass, drag, length = material_from_geometry(base, hang, area)
         zones.append(ZoneSpec(pid, center_x, half_w, drivers, mass, drag, length))
     return zones
@@ -129,11 +173,17 @@ def skirt_zones(stack: LayerStack, meshes: list[Mesh]) -> list[ZoneSpec]:
 
 def skirt_specs_from_params(param_ids) -> list[ZoneSpec]:
     """Base-material zone specs (no geometry scaling, no windows) for the skirt params already present —
-    used by ``generate_physics`` when meshes aren't supplied. Physics only needs param/drivers/material.
-    """
+    used by ``generate_physics`` when meshes aren't supplied. Emits left edge, then each present interior
+    (C, C1, C2 …), then right edge — matching ``skirt_zones``' order; for the base L/C/R set that is the
+    old output verbatim. Physics only needs param/drivers/material, so windows are zeroed."""
     ids = set(param_ids)
     out: list[ZoneSpec] = []
-    for pid, drivers, (mass, drag, length) in _ZONE_BASE:
-        if pid in ids:
-            out.append(ZoneSpec(pid, 0.0, 0.0, drivers, mass, drag, length))
+    if "ParamSkirtL" in ids:
+        out.append(ZoneSpec("ParamSkirtL", 0.0, 0.0, list(_EDGE_DRIVERS_L), *_EDGE_BASE))
+    k = 0
+    while _interior_param_id(k) in ids:
+        out.append(ZoneSpec(_interior_param_id(k), 0.0, 0.0, list(_INTERIOR_DRIVERS), *_INTERIOR_BASE))
+        k += 1
+    if "ParamSkirtR" in ids:
+        out.append(ZoneSpec("ParamSkirtR", 0.0, 0.0, list(_EDGE_DRIVERS_R), *_EDGE_BASE))
     return out

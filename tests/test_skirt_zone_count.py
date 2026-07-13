@@ -10,7 +10,7 @@ from pathlib import Path
 from image2live2d.core.physics import generate_physics
 from image2live2d.core.rig import author_rig, select_template
 from image2live2d.core.structure import skirt_zones
-from image2live2d.core.structure.skirt import _MAX_ZONES, _REF_SPAN, _zone_count
+from image2live2d.core.structure.skirt import _MAX_ZONES, _MIN_ZONES, _REF_SPAN, _zone_count
 from image2live2d.core.types import Layer, LayerStack
 from image2live2d.irr.schema import Mesh
 from image2live2d.irr.schema import SemanticRole as R
@@ -45,12 +45,15 @@ _REF_BOX = (0.30, 0.20, 0.70, 0.44)                 # span 0.40 -> 3 zones
 _WIDE_BOX = (0.20, 0.20, 0.80, 0.44)                # span 0.60 -> 4 zones (one extra interior)
 
 
-def test_zone_count_scales_with_width_and_caps():
-    assert _zone_count(0.25) == 3                    # narrow never drops below 3
+def test_zone_count_scales_with_width_caps_and_floors():
     assert _zone_count(_REF_SPAN) == 3               # reference width -> 3
+    assert _zone_count(0.25) == 3                    # reference band -> still 3 (byte-identical)
     assert _zone_count(0.60) == 4                    # +1 lobe
     assert _zone_count(0.76) == 5                    # +2 lobes
-    assert _zone_count(10.0) == _MAX_ZONES           # capped
+    assert _zone_count(10.0) == _MAX_ZONES           # capped wide
+    assert _zone_count(0.22) == 2                    # narrow -> two halves
+    assert _zone_count(0.08) == 1                    # very narrow -> a single central sway
+    assert _zone_count(0.01) == _MIN_ZONES           # floored narrow
 
 
 def test_reference_width_stays_lcr():
@@ -68,6 +71,17 @@ def test_wide_hem_adds_evenly_tiled_interior_zones():
     assert centers == sorted(centers) and len(set(centers)) == len(centers)
     cx0, cx1 = 0.20, 0.80
     assert all(cx0 < c < cx1 for c in centers)
+
+
+def test_narrow_hem_collapses_to_halves_then_a_single_central_sway():
+    # a two-lobe narrow skirt -> just the leg-coupled L/R halves, no redundant centre window
+    two = skirt_zones(*_scene((0.40, 0.20, 0.62, 0.44)))          # span 0.22 -> 2 zones
+    assert [z.param_id for z in two] == ["ParamSkirtL", "ParamSkirtR"]
+    # a very narrow skirt -> a single body-coupled central sway spanning the whole hem
+    one = skirt_zones(*_scene((0.46, 0.20, 0.54, 0.44)))          # span 0.08 -> 1 zone
+    assert [z.param_id for z in one] == ["ParamSkirtC"]
+    assert abs(one[0].center_x - 0.50) < 1e-9                     # centred on the hem
+    assert abs(one[0].half_width - 0.08) < 1e-9                   # window spans the full width
 
 
 def test_author_mints_the_extra_interior_param():

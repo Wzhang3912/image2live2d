@@ -8,10 +8,11 @@ tuning is the pre-P3 constants, anchored to a reference-sized garment (factor 1.
 keeps today's feel and only unusual garments scale.
 
 The zone *count* now scales with hem width (P3b): a reference-width hem keeps the three overlapping
-L/C/R windows (byte-identical), while a markedly wider hem breaks into more evenly-tiled interior lobes
-(``ParamSkirtC1``, ``ParamSkirtC2`` …) so a full skirt ripples in more independent zones. Both
-``author_rig`` (windows) and ``generate_physics`` (material) consume this one planner so they never
-drift.
+L/C/R windows (byte-identical), a markedly wider hem breaks into more evenly-tiled interior lobes
+(``ParamSkirtC1``, ``ParamSkirtC2`` …) so a full skirt ripples in more independent zones, and a narrow
+hem collapses to two halves or a single central sway so a thin frill doesn't carry three redundant
+windows. Both ``author_rig`` (windows) and ``generate_physics`` (material) consume this one planner so
+they never drift.
 """
 
 from __future__ import annotations
@@ -32,12 +33,15 @@ _REF_HANG = 0.22
 _REF_AREA = 0.09
 
 # Zone *count* scales with hem width (P3b). A reference-width hem (~_REF_SPAN of the canvas) ripples in
-# 3 lobes — the pre-P3b fixed L/C/R; a markedly wider hem breaks into more independent lobes, one extra
-# per ~_SPAN_PER_ZONE of added width, capped at _MAX_ZONES. Exactly 3 zones reproduces the old layout
-# (centres, windows, drivers, material) byte-for-byte, so every reference-width garment is unchanged.
+# 3 lobes — the pre-P3b fixed L/C/R. Each _SPAN_PER_ZONE of width away from the reference adds or drops a
+# lobe: a markedly wider hem breaks into more independent lobes (capped at _MAX_ZONES); a narrow hem
+# (a pencil skirt, a thin frill) collapses to fewer — 2 halves, or a single central sway — down to
+# _MIN_ZONES. Exactly 3 zones reproduces the old layout (centres, windows, drivers, material) byte-for-
+# byte, and the reference band stays 3, so every reference-width garment is unchanged.
 _REF_SPAN = 0.40        # a typical skirt spans ~40% of the canvas -> 3 zones
-_SPAN_PER_ZONE = 0.16   # each additional ~16% of width adds a hem lobe
+_SPAN_PER_ZONE = 0.16   # each ~16% of width away from the reference adds/drops a hem lobe
 _MAX_ZONES = 7          # cap: even a full-width gown ripples in a bounded number of lobes
+_MIN_ZONES = 1          # floor: a very narrow hem is one central sway, not three overlapping windows
 
 # Edge vs interior base tuning + drivers (were the per-zone _SKIRT_ZONES constants). Edge zones couple
 # to the near leg; interior zones carry more fabric (heavier, longer) and couple to body lean/twist.
@@ -58,17 +62,21 @@ def _interior_param_id(k: int) -> str:
 
 
 def _zone_count(span: float) -> int:
-    """Number of hem lobes for a garment of horizontal ``span`` (normalized to the canvas). 3 up to the
-    reference width, then +1 per _SPAN_PER_ZONE of extra width, capped — never below 3 (byte-identical)."""
-    if span <= _REF_SPAN:
-        return 3
-    return min(3 + int((span - _REF_SPAN) / _SPAN_PER_ZONE), _MAX_ZONES)
+    """Number of hem lobes for a garment of horizontal ``span`` (normalized to the canvas): 3 across the
+    reference band, +1 per _SPAN_PER_ZONE wider (capped at _MAX_ZONES), -1 per _SPAN_PER_ZONE narrower
+    (floored at _MIN_ZONES). The reference band [_REF_SPAN - _SPAN_PER_ZONE, _REF_SPAN + _SPAN_PER_ZONE)
+    stays 3, so every current (0.40-span) test garment is byte-identical."""
+    steps = int((span - _REF_SPAN) / _SPAN_PER_ZONE) if span >= _REF_SPAN else \
+        -int((_REF_SPAN - span) / _SPAN_PER_ZONE)
+    return max(_MIN_ZONES, min(3 + steps, _MAX_ZONES))
 
 
 def _zone_layout(n: int) -> list[tuple[str, list[str], tuple[float, float, float]]]:
-    """(param id, drivers, base material) for each of ``n`` zones, left→right. The two ends are the leg-
-    coupled edges (L, R); everything between is a body-coupled interior. ``n == 3`` yields exactly the
-    old L / C / R layout."""
+    """(param id, drivers, base material) for each of ``n`` zones, left→right. A single zone is one
+    body-coupled central sway (``ParamSkirtC``); otherwise the two ends are the leg-coupled edges (L, R)
+    and everything between is a body-coupled interior. ``n == 3`` yields exactly the old L / C / R."""
+    if n == 1:
+        return [("ParamSkirtC", list(_INTERIOR_DRIVERS), _INTERIOR_BASE)]
     out: list[tuple[str, list[str], tuple[float, float, float]]] = []
     interior_k = 0
     for i in range(n):

@@ -129,12 +129,21 @@ def test_mouth_open_uses_landmark_pivot():
     mp = _param(params, "ParamMouthOpenY")
     open_kf = _kf(mp, 1.0)
     mmesh = meshes[0]
-    # vertices above the landmark pivot (0.34) must not drop; below must drop
+    # Lens open about the landmark pivot (0.34): below it the lip drops, above it rises a little, and
+    # both taper to the mouth corners (x=0.40/0.60, half-width 0.10). Assert per vertex with that taper.
+    cx, half = 0.50, 0.10
+    saw_drop = saw_rise = False
     for (x, y), (dx, dy) in zip(mmesh.vertices, open_kf.mesh_offsets["mouth"]):
-        if y >= 0.34:
-            assert dy == pytest.approx(0.0)
+        taper = max(0.0, 1.0 - abs(x - cx) / half)
+        if taper <= 1e-9 or y == pytest.approx(0.34):
+            assert dy == pytest.approx(0.0)            # a corner (or the pivot line) is anchored
+        elif y < 0.34:
+            assert dy < 0.0                            # lower lip drops
+            saw_drop = True
         else:
-            assert dy < 0.0
+            assert dy > 0.0                            # upper lip rises
+            saw_rise = True
+    assert saw_drop and saw_rise
 
 
 # --------------------------------------------------------------------------------------------------

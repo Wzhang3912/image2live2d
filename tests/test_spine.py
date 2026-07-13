@@ -144,14 +144,22 @@ def test_blink_collapses_eye_at_closed():
     assert max(ys_closed) - min(ys_closed) < (max(y for _, y in rest) - min(y for _, y in rest))
 
 
-def test_mouth_open_drops_lower_vertices():
+def test_mouth_open_is_a_lens_cavity():
     rig = _authored_rig()
     opened = deform_at(rig, "ParamMouthOpenY", 1.0)["mouth"]
     rest = rig.mesh_for("mouth").vertices
-    # at least one lower vertex moved down, none moved up
+    cx = (min(x for x, _ in rest) + max(x for x, _ in rest)) / 2.0
+    cy = (min(y for _, y in rest) + max(y for _, y in rest)) / 2.0
     deltas = [oy - ry for (_, oy), (_, ry) in zip(opened, rest)]
-    assert min(deltas) < 0.0
-    assert max(deltas) <= 1e-9
+    # lens open: the lower lip drops and the upper lip rises a smaller amount (jaw does most of it).
+    assert min(deltas) < 0.0                                   # lower lip drops
+    assert max(deltas) > 0.0                                   # upper lip rises (not a flat jaw-slide)
+    assert abs(min(deltas)) > abs(max(deltas))                 # lower drop dominates the upper rise
+    # the corners are anchored: a centre vertex moves more than a corner vertex at the same height band.
+    lower = [i for i, (_, y) in enumerate(rest) if y < cy]
+    corner = max(lower, key=lambda i: abs(rest[i][0] - cx))
+    centre = min(lower, key=lambda i: abs(rest[i][0] - cx))
+    assert abs(deltas[centre]) > abs(deltas[corner])
 
 
 def test_head_turn_is_a_coherent_warp():

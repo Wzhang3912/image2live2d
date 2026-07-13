@@ -14,7 +14,8 @@ function works with ``landmarks=None``.
 
 What we author for a portrait:
 * ``ParamEyeLOpen`` / ``ParamEyeROpen`` — blink (collapse the eye group toward its centre line).
-* ``ParamMouthOpenY`` — drop the lower mouth vertices.
+* ``ParamMouthOpenY`` — open the mouth into a lens-shaped cavity (lower lip drops, upper lip rises a
+  little, corners anchored), not a flat jaw-slide.
 * ``ParamAngleX`` / ``ParamAngleY`` — head turn via a single **shared pseudo-3D spherical warp**
   applied coherently to every head vertex (features near the turn axis shift most; the receding
   edge foreshortens). This is the effect a Live2D warp deformer produces, baked into keyforms so it
@@ -110,6 +111,9 @@ _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (wa
 _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
 _BROW_FRAC = 0.4      # brow shift as fraction of brow bbox height at +-1
 _MOUTH_OPEN = 0.7     # lower-lip drop as fraction of mouth bbox height at 1
+_UPPER_LIP_FRAC = 0.35  # upper-lip *rise* on open as a fraction of the lower-lip drop — the jaw does
+#                         most of the opening, but a small upper-lip lift turns a jaw-slide into a
+#                         lens-shaped cavity. Both lips taper to the (anchored) mouth corners.
 _MOUTH_FORM = 0.35    # corner raise/lower as fraction of mouth height at +-1
 _BLINK = 1.0          # full collapse at 0
 
@@ -186,7 +190,7 @@ def author_rig(
             pivot_y = lm.mouth.center[1]
             height = max(lm.mouth.height, 1e-6)
             params.append(_two_pose("ParamMouthOpenY", 0.0, 1.0, mouth,
-                                    lambda m: _drop_below(m, _MOUTH_OPEN, pivot_y, height)))
+                                    lambda m: _open_lens(m, _MOUTH_OPEN, pivot_y, height)))
         else:
             params.append(
                 _two_pose("ParamMouthOpenY", 0.0, 1.0, mouth, lambda m: _drop_lower(m, _MOUTH_OPEN))
@@ -666,32 +670,33 @@ def _collapse_to(m: Mesh, amount: float, cy: float) -> list[Vec2]:
     return [(0.0, (cy - y) * amount) for _, y in m.vertices]
 
 
+def _open_lens(m: Mesh, amount: float, pivot_y: float, height: float) -> list[Vec2]:
+    """A **lens-shaped** mouth open about the lip line ``pivot_y`` (normalized by mouth ``height``):
+    the lower lip drops and the upper lip rises a smaller amount (``_UPPER_LIP_FRAC``), both tapering to
+    zero at the mouth *corners* so the opening reads as a cavity, not a jaw-slide. The horizontal taper
+    uses the mesh's own bbox (anchoring its true corners), so it's robust to a degenerate-width landmark;
+    ``pivot_y``/``height`` come from the landmark (or the bbox mid/extent in the fallback). Every shift
+    is capped at ``_MOUTH_CAP`` to bound an over-measured See-through mouth layer."""
+    x0, _, x1, _ = _bbox(m.vertices)
+    cx = (x0 + x1) / 2.0
+    half = max((x1 - x0) / 2.0, 1e-6)
+    out: list[Vec2] = []
+    for x, y in m.vertices:
+        taper = max(0.0, 1.0 - abs(x - cx) / half)          # 1 at centre -> 0 at/beyond the corners
+        if y < pivot_y:                                     # lower lip: drops
+            factor = min(1.0, (pivot_y - y) / height)
+            out.append((0.0, -min(amount * height * factor * taper, _MOUTH_CAP)))
+        else:                                               # upper lip: smaller rise
+            factor = min(1.0, (y - pivot_y) / height)
+            out.append((0.0, min(_UPPER_LIP_FRAC * amount * height * factor * taper, _MOUTH_CAP)))
+    return out
+
+
 def _drop_lower(m: Mesh, amount: float) -> list[Vec2]:
+    """Lens-shaped open with no landmark — pivot at the bbox mid-line, scale from the bbox height."""
     _, y0, _, y1 = _bbox(m.vertices)
     cy = (y0 + y1) / 2.0
-    height = y1 - y0
-    span = cy - y0
-    out: list[Vec2] = []
-    for _, y in m.vertices:
-        if y < cy and span > 0:
-            factor = (cy - y) / span
-            out.append((0.0, -min(amount * height * factor, _MOUTH_CAP)))  # cap runaway on tall meshes
-        else:
-            out.append((0.0, 0.0))
-    return out
-
-
-def _drop_below(m: Mesh, amount: float, pivot_y: float, height: float) -> list[Vec2]:
-    """Drop vertices below the landmark lip line ``pivot_y``; deeper vertices drop more, normalized
-    by the real mouth ``height``. Vertices at/above the line stay (the upper lip)."""
-    out: list[Vec2] = []
-    for _, y in m.vertices:
-        if y < pivot_y:
-            factor = min(1.0, (pivot_y - y) / height)
-            out.append((0.0, -min(amount * height * factor, _MOUTH_CAP)))  # cap runaway on tall meshes
-        else:
-            out.append((0.0, 0.0))
-    return out
+    return _open_lens(m, amount, pivot_y=cy, height=max(y1 - y0, 1e-6))
 
 
 def _rotate(m: Mesh, center: Vec2, theta: float) -> list[Vec2]:

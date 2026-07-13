@@ -26,8 +26,16 @@ NO_TEXTURE = 4294967295  # uint.max — empty texture slot / thumbnail sentinel
 DEFAULT_SCALE = 1000.0  # pixels per normalized unit
 
 # Auto-physics tuning (SimplePhysics is transform-driven; an anchor node moves with the driver
-# param and its pendulum drives the hair output param). These are first-pass guesses — the visible
-# swing magnitude likely needs tuning against the nijilive runtime.
+# param and its pendulum drives the hair output param).
+#
+# FEEL-PARITY (P0) — keep this pendulum in step with the Cubism one in
+# backends/live2d/physics3.py::_vertices. The two runtimes parameterize the pendulum differently
+# (Cubism: Mobility/Delay/Acceleration; nijilive: gravity/length/angle-damping), so tools/feel_parity.py
+# is the oracle: it simulates THIS pendulum (natural frequency, damping ratio, settle) and range-checks
+# the Cubism vertices against real pro physics3.json. As tuned, this pendulum swings at ~1.2-1.3 Hz with
+# hair lightly damped (zeta ~0.24) and skirt more damped (~0.38, settles ~1s vs hair ~2s) — the correct
+# feel ordering. The absolute swing magnitude across the two runtimes is the one thing the oracle can't
+# self-confirm; it's eyeballed side by side in nijigenerate + Cubism Viewer.
 _ANCHOR_SHIFT = 60.0          # px the anchor translates at the driver param's extreme
 _PHYS_GRAVITY = 9.8           # SimplePhysics scalar gravity
 _PHYS_LENGTH_SCALE = 120.0    # IRR pendulum length (~1) -> px

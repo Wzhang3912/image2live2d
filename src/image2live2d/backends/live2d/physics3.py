@@ -30,10 +30,17 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 def _vertices(mass: float, drag: float, length: float) -> list[dict]:
-    """A fixed root + a swinging tip. Mobility falls with drag; delay/acceleration scale with mass."""
-    mobility = _clamp(1.0 - drag, 0.3, 0.99)
-    delay = _clamp(0.4 + 0.4 * mass, 0.4, 1.5)
-    accel = _clamp(1.0 / max(mass, 0.1), 0.5, 2.0)
+    """A fixed root + a swinging tip. Mobility falls with drag; delay/acceleration scale with mass.
+
+    The clamp ranges are **calibrated to real pro physics3.json** (Hiyori + Akari, read via
+    tools/feel_parity.py): Mobility 0.71-1.00, Delay 0.60-1.00, Acceleration 0.80-3.00 (typically
+    1.0-2.0), Radius = tip Y. The pre-calibration values fell outside these (Delay up to 1.2,
+    Acceleration down to 0.5 — under-driven hair, Mobility down to 0.61 — over-damped cloth), so a real
+    Live2D runtime would swing our parts more weakly/stiffly than an artist's. Keep these in step with
+    nijilive's puppet.py pendulum (see the FEEL-PARITY note there)."""
+    mobility = _clamp(1.0 - drag, 0.72, 0.99)            # real Hiyori/Akari union: >= ~0.71
+    delay = _clamp(0.4 + 0.4 * mass, 0.60, 1.00)         # real: 0.60-1.00 (never > 1.0)
+    accel = _clamp(1.5 / max(mass, 0.1), 1.00, 2.00)     # real: ~1.0-2.0 gravity gain (was < 1 -> weak)
     tip_y = max(0.1, length) * _LENGTH_UNITS
     return [
         {"Position": {"X": 0.0, "Y": 0.0}, "Mobility": 1.0, "Delay": 1.0,

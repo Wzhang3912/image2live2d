@@ -36,6 +36,8 @@ from .calibrate import (
     sweep,
 )
 from .graph import (
+    ARM_L,
+    ARM_R,
     BODY,
     BODY_ROLES,
     HEAD,
@@ -77,6 +79,8 @@ __all__ = [
     "mesh_probes",
     "HEAD",
     "BODY",
+    "ARM_L",
+    "ARM_R",
     "HEAD_ROLES",
     "BODY_ROLES",
     "RigNode",

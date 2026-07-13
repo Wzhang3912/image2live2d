@@ -320,6 +320,66 @@ def _clamp(v: float, lo: float, hi: float) -> float:
 
 
 # --------------------------------------------------------------------------------------------------
+# Mesh adapter: LayerStack + meshes -> per-part dynamics (no Pillow, deterministic)
+# --------------------------------------------------------------------------------------------------
+# The pipeline authors from meshes, not textures. A grid mesh already drops transparent cells, so the
+# mesh silhouette IS the alpha silhouette: sampling point-in-mesh gives the same free-edge/cantilever
+# cues the alpha path does, but purely from geometry. Fewer probes than the alpha path (a mesh boundary
+# is cleaner than antialiased alpha), keeping it cheap enough to run inside author_rig / generate_physics.
+_MESH_SAMPLES = 64
+
+
+def _in_triangle(px: float, py: float, tri: tuple[Vec2, Vec2, Vec2]) -> bool:
+    (ax, ay), (bx, by), (cx, cy) = tri
+    d1 = (px - bx) * (ay - by) - (ax - bx) * (py - by)
+    d2 = (px - cx) * (by - cy) - (bx - cx) * (py - cy)
+    d3 = (px - ax) * (cy - ay) - (cx - ax) * (py - ay)
+    has_neg = d1 < 0 or d2 < 0 or d3 < 0
+    has_pos = d1 > 0 or d2 > 0 or d3 > 0
+    return not (has_neg and has_pos)          # same sign on all three edges -> inside (or on) the tri
+
+
+def _mesh_sampler(mesh) -> AlphaSampler:
+    """A binary alpha sampler (255 inside, else 0) for a mesh. The scorer's ``v`` runs top->bottom
+    (down) while mesh space is y up, so a probe ``(u, v)`` tests the model point ``(u, 1 - v)``."""
+    tris = [(mesh.vertices[a], mesh.vertices[b], mesh.vertices[c]) for a, b, c in mesh.triangles]
+
+    def alpha_at(u: float, v: float) -> int:
+        px, py = u, 1.0 - v
+        for tri in tris:
+            if _in_triangle(px, py, tri):
+                return 255
+        return 0
+
+    return alpha_at
+
+
+def mesh_probes(stack: LayerStack, meshes: list) -> list[PartProbe]:
+    """Per-part probes backed by point-in-mesh sampling (skips background/other and meshless layers)."""
+    mesh_by_part = {m.part_id: m for m in meshes}
+    probes: list[PartProbe] = []
+    for layer in stack.layers:
+        if layer.semantic_role in (SemanticRole.background, SemanticRole.other):
+            continue
+        m = mesh_by_part.get(layer.id)
+        if m is not None:
+            probes.append(PartProbe(layer.id, layer.semantic_role, _mesh_sampler(m), layer.draw_order))
+    return probes
+
+
+def analyze_meshes(
+    stack: LayerStack,
+    meshes: list,
+    *,
+    samples: int = _MESH_SAMPLES,
+    alpha_threshold: int = DEFAULT_ALPHA_THRESHOLD,
+) -> list[PartDynamics]:
+    """Score every part's dynamics from its **mesh** silhouette — the deterministic, Pillow-free twin of
+    ``analyze_stack`` used inside the mesh pipeline. Same scorer, geometry-derived occupancy."""
+    return score_dynamics(mesh_probes(stack, meshes), samples=samples, alpha_threshold=alpha_threshold)
+
+
+# --------------------------------------------------------------------------------------------------
 # Pillow wrapper: LayerStack -> per-part dynamics
 # --------------------------------------------------------------------------------------------------
 def analyze_stack(

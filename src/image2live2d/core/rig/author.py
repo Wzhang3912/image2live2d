@@ -41,7 +41,7 @@ from ..structure.graph import (
 )
 from ..structure.graph import BODY_ROLES as _BODY_ROLES
 from ..structure.graph import HEAD_ROLES as _HEAD_ROLES
-from ..structure.appendages import accessory_appendages
+from ..structure.appendages import accessory_appendages, garment_appendages
 from ..structure.skirt import skirt_cloth, skirt_zones
 from ..structure.strands import hair_strands
 from ..types import LayerStack
@@ -105,6 +105,7 @@ _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
 _HAIR_SWAY = 0.22     # hair-tip swing as fraction of strand length at +-1 (roots stay) — gentle so
 #                       hair reads as attached to the head, not flying off it
 _ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways subtly off its mount)
+_GARMENT_SWAY = 0.20  # cape/sleeve dangle: between an ornament and a skirt hem (a bigger sheet of cloth)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
 _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
 _BROW_FRAC = 0.4      # brow shift as fraction of brow bbox height at +-1
@@ -264,6 +265,13 @@ def author_rig(
     for spec in accessory_appendages(stack, meshes, graph):
         params.append(_hair_sway(spec.param_id, spec.part_id,
                                  mesh_by_part[spec.part_id], None, amount=_ACC_SWAY))
+
+    # --- Garment appendage sway (physics OUTPUT params) -----------------------------------------
+    # A clothing part that hangs free (cape, long sleeve, coattail) — told from a rigid bodice by the
+    # dynamics free-edge score — sways from its top edge like the skirt hem, but body-driven.
+    for spec in garment_appendages(stack, meshes, graph):
+        params.append(_hair_sway(spec.param_id, spec.part_id,
+                                 mesh_by_part[spec.part_id], None, amount=_GARMENT_SWAY))
 
     # --- Body sway / lean (when a body is present) ----------------------------------------------
     body = members(*_BODY_ROLES) + body_acc

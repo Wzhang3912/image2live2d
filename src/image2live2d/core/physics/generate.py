@@ -9,7 +9,7 @@ the result always satisfies the IRR's referential integrity.
 
 from __future__ import annotations
 
-from ..structure.appendages import accessory_appendages
+from ..structure.appendages import accessory_appendages, garment_appendages
 from ..structure.graph import build_rig_graph
 from ..structure.skirt import skirt_specs_from_params, skirt_zones
 from ..structure.strands import hair_specs_from_params, hair_strands
@@ -87,4 +87,14 @@ def generate_physics(
             rigs.append(PhysicsRig(id=f"phys_{a.param_id}", driver_param=a.driver,
                                    output_param=a.param_id, extra_drivers=extras,
                                    mass=a.mass, drag=a.drag, length=a.length))
+        # Garment appendages (cape/sleeve/coattail): a body-driven springy cloth pendulum, like the
+        # skirt but hanging from the torso/shoulders. Only the free-edged garments reach here.
+        for g in garment_appendages(stack, meshes, graph):
+            if g.param_id not in param_ids or g.driver not in param_ids:
+                continue
+            extras = [e for e in g.extra_drivers if e in param_ids]
+            rigs.append(PhysicsRig(id=f"phys_{g.param_id}", driver_param=g.driver,
+                                   output_param=g.param_id, extra_drivers=extras,
+                                   model=PhysicsModel.spring_pendulum,
+                                   mass=g.mass, drag=g.drag, length=g.length))
     return rigs

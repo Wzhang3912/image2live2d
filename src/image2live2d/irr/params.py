@@ -76,9 +76,12 @@ LIMB_PARAM_IDS: tuple[str, ...] = tuple(s[0] for s in _LIMB_PARAM_SPECS)
 # Dynamically-minted physics-output params, all sharing the standard [-1, 1] range:
 #  * hair strands (P2): a suffixed base id, e.g. a second side-tail is ``ParamHairSide2``.
 #  * accessory appendages (P4): ``ParamAcc0``, ``ParamAcc1``, … one per dangling ornament.
+#  * garment appendages (P4b): ``ParamCloth0``, ``ParamCloth1`` … one per swingable cape/sleeve.
 #  * extra skirt interior zones (P3b): ``ParamSkirtC1``, ``ParamSkirtC2`` … on a wide hem (L/C/R stay
 #    in the catalog above; only the extra interior lobes are minted).
-_DYNAMIC_PARAM_RE = re.compile(r"^(?:ParamHair(?:Front|Side|Back)\d+|ParamAcc\d+|ParamSkirtC\d+)$")
+_DYNAMIC_PARAM_RE = re.compile(
+    r"^(?:ParamHair(?:Front|Side|Back)\d+|ParamAcc\d+|ParamCloth\d+|ParamSkirtC\d+)$"
+)
 
 
 def make_parameter(param_id: str) -> Parameter:

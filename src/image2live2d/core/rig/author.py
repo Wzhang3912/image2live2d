@@ -41,6 +41,7 @@ from ..structure.graph import (
 )
 from ..structure.graph import BODY_ROLES as _BODY_ROLES
 from ..structure.graph import HEAD_ROLES as _HEAD_ROLES
+from ..structure.skirt import skirt_cloth, skirt_zones
 from ..structure.strands import hair_strands
 from ..types import LayerStack
 from ...irr.params import make_parameter
@@ -116,12 +117,7 @@ _BLINK = 1.0          # full collapse at 0
 #  * mouth-open scaled by an over-measured mouth-layer height (See-through mouths cover a big region)
 _TURN_CAP = 0.25      # max per-vertex head/body-turn shift (uniform-scaled to preserve the warp shape)
 _MOUTH_CAP = 0.10     # max per-vertex mouth open/form shift (a mouth never needs more)
-_FOOTWEAR_TOP_Y = 0.28  # a clothing part whose top is below this (model y-up) sits entirely at the
-#                         feet -> it's footwear (shoes/socks), excluded from the skirt hem physics
-_CLOTH_HEM_MIN_Y = 0.20  # "bundled skirt+legs": a clothing part that starts at/above the waist AND
-_CLOTH_WAIST_Y = 0.45    # reaches down into the feet region spans the whole lower body (See-through
-#                          often fuses skirt+legs) -> swinging its hem swings the legs off the feet,
-#                          so it's excluded from skirt physics (a normal/short skirt ends above this)
+# (skirt/footwear thresholds moved to core.structure.skirt, which owns the hem planner)
 _DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more than this. Bounds the
 #                       remaining magnitude runaways (blink/hair/cloth/brow) when See-through emits an
 #                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
@@ -252,35 +248,13 @@ def author_rig(
         params.append(_hair_sway(spec.param_id, spec.part_id,
                                  mesh_by_part[spec.part_id], spec.vertex_indices))
 
-    # --- Cloth/skirt hem sway, split into L/C/R zones (physics OUTPUT params) --------------------
-    # Each zone swings a windowed strip of the hem; overlapping triangular windows keep the cloth
-    # continuous. The physics rig drives each zone from the nearest lower-body motion (leg + body).
-    # Exclude FOOTWEAR: See-through maps shoes/socks to `clothing`, and being at the very bottom they'd
-    # be treated as the skirt hem and swing right off the feet. A real skirt reaches up to the waist,
-    # so a clothing part sitting entirely near the floor (top < _FOOTWEAR_TOP_Y) is footwear, not hem.
-    def _skirtable(m):
-        x0, y0, x1, y1 = _bbox(m.vertices)          # y-up: y0=bottom, y1=top
-        if y1 < _FOOTWEAR_TOP_Y:
-            return False                             # footwear (entirely at the feet)
-        if y0 < _CLOTH_HEM_MIN_Y and y1 >= _CLOTH_WAIST_Y:
-            return False                             # skirt+legs bundled (waist -> feet)
-        if y0 >= _CLOTH_WAIST_Y:
-            return False                             # a top/shirt: sits entirely at/above the waist,
-            #                                          so it has no hem to swing — it must ride the body
-            #                                          rigidly, not flap like a skirt (See-through maps
-            #                                          the sailor top to `clothing` too).
-        return True
-    cloth = [(pid, m) for pid, m in members(SemanticRole.clothing) if _skirtable(m)]
-    if cloth:
-        cx0, _, cx1, _ = _union_bbox([m for _, m in cloth])
-        span = max(cx1 - cx0, 1e-6)
-        half_w = span / 3.0  # windows overlap (each ~2/3 span wide) for continuity
-        for pid, center_x in (
-            ("ParamSkirtL", cx0 + span / 6.0),
-            ("ParamSkirtC", (cx0 + cx1) / 2.0),
-            ("ParamSkirtR", cx1 - span / 6.0),
-        ):
-            params.append(_skirt_zone(pid, cloth, center_x=center_x, half_width=half_w))
+    # --- Cloth/skirt hem sway, L/C/R zones (physics OUTPUT params) -------------------------------
+    # Which clothing is a swingable hem, and each zone's overlapping window, come from the shared
+    # skirt planner (core.structure.skirt); the pendulum *material* is geometry-scaled there and read
+    # by generate_physics. The sway keyform windows are unchanged, so this is byte-identical here.
+    cloth = skirt_cloth(stack, meshes)
+    for z in skirt_zones(stack, meshes):
+        params.append(_skirt_zone(z.param_id, cloth, center_x=z.center_x, half_width=z.half_width))
 
     # --- Body sway / lean (when a body is present) ----------------------------------------------
     body = members(*_BODY_ROLES) + body_acc

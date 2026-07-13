@@ -41,6 +41,7 @@ from ..structure.graph import (
 )
 from ..structure.graph import BODY_ROLES as _BODY_ROLES
 from ..structure.graph import HEAD_ROLES as _HEAD_ROLES
+from ..structure.appendages import accessory_appendages
 from ..structure.skirt import skirt_cloth, skirt_zones
 from ..structure.strands import hair_strands
 from ..types import LayerStack
@@ -103,6 +104,7 @@ _BODY_TURN_Y = math.radians(6.0)
 _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
 _HAIR_SWAY = 0.22     # hair-tip swing as fraction of strand length at +-1 (roots stay) — gentle so
 #                       hair reads as attached to the head, not flying off it
+_ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways subtly off its mount)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
 _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
 _BROW_FRAC = 0.4      # brow shift as fraction of brow bbox height at +-1
@@ -255,6 +257,13 @@ def author_rig(
     cloth = skirt_cloth(stack, meshes)
     for z in skirt_zones(stack, meshes):
         params.append(_skirt_zone(z.param_id, cloth, center_x=z.center_x, half_width=z.half_width))
+
+    # --- Accessory dangle (physics OUTPUT params) -----------------------------------------------
+    # Each accessory the graph bound to the head/body also gets a gentle pendulum, so a dangling
+    # ornament swings as secondary motion (driven, in physics, by that same parent's turn/sway).
+    for spec in accessory_appendages(stack, meshes, graph):
+        params.append(_hair_sway(spec.param_id, spec.part_id,
+                                 mesh_by_part[spec.part_id], None, amount=_ACC_SWAY))
 
     # --- Body sway / lean (when a body is present) ----------------------------------------------
     body = members(*_BODY_ROLES) + body_acc

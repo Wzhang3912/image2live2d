@@ -73,18 +73,19 @@ PHYSICS_PARAM_IDS: tuple[str, ...] = tuple(s[0] for s in _PHYSICS_PARAM_SPECS)
 LIMB_PARAM_IDS: tuple[str, ...] = tuple(s[0] for s in _LIMB_PARAM_SPECS)
 
 
-# Extra hair strands (P2) mint suffixed ids off a base physics param — e.g. a second side-tail is
-# ``ParamHairSide2``. They share the base's [-1, 1] range; the base ids stay in the catalog above.
-_HAIR_STRAND_RE = re.compile(r"^ParamHair(?:Front|Side|Back)\d+$")
+# Dynamically-minted physics-output params, all sharing the standard [-1, 1] range:
+#  * hair strands (P2): a suffixed base id, e.g. a second side-tail is ``ParamHairSide2``.
+#  * accessory appendages (P4): ``ParamAcc0``, ``ParamAcc1``, … one per dangling ornament.
+_DYNAMIC_PARAM_RE = re.compile(r"^(?:ParamHair(?:Front|Side|Back)\d+|ParamAcc\d+)$")
 
 
 def make_parameter(param_id: str) -> Parameter:
-    """Create an empty (keyform-less) ``Parameter`` for a known standard id, or a suffixed hair-strand
-    id (``ParamHairSide2`` …) which mints a physics-output param with the standard [-1, 1] range."""
+    """Create an empty (keyform-less) ``Parameter`` for a known standard id, or a dynamically-minted
+    physics-output id (``ParamHairSide2``, ``ParamAcc0`` …) with the standard [-1, 1] range."""
     if param_id in _ALL:
         _id, lo, hi, default = _ALL[param_id]
         return Parameter(id=_id, min=lo, max=hi, default=default)
-    if _HAIR_STRAND_RE.match(param_id):
+    if _DYNAMIC_PARAM_RE.match(param_id):
         return Parameter(id=param_id, min=-1.0, max=1.0, default=0.0)
     raise KeyError(f"unknown standard parameter id {param_id!r}")
 

@@ -33,6 +33,7 @@ from .strands import (
     StrandSpec,
     hair_specs_from_params,
     hair_strands,
+    mesh_components,
     strand_param_id,
 )
 
@@ -59,5 +60,6 @@ __all__ = [
     "StrandSpec",
     "hair_strands",
     "hair_specs_from_params",
+    "mesh_components",
     "strand_param_id",
 ]

@@ -27,6 +27,14 @@ from .graph import (
     analyze_structure,
     build_rig_graph,
 )
+from .skirt import (
+    SKIRT_PARAM_IDS,
+    ZoneSpec,
+    material_from_geometry,
+    skirt_cloth,
+    skirt_specs_from_params,
+    skirt_zones,
+)
 from .strands import (
     HAIR_BASE_TUNING,
     HAIR_DRIVER,
@@ -62,4 +70,10 @@ __all__ = [
     "hair_specs_from_params",
     "mesh_components",
     "strand_param_id",
+    "SKIRT_PARAM_IDS",
+    "ZoneSpec",
+    "material_from_geometry",
+    "skirt_cloth",
+    "skirt_zones",
+    "skirt_specs_from_params",
 ]

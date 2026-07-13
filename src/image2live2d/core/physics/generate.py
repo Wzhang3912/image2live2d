@@ -9,6 +9,7 @@ the result always satisfies the IRR's referential integrity.
 
 from __future__ import annotations
 
+from ..structure.skirt import skirt_specs_from_params, skirt_zones
 from ..structure.strands import hair_specs_from_params, hair_strands
 from ..types import LayerStack
 from ...irr.schema import Mesh, Parameter, PhysicsModel, PhysicsRig
@@ -22,13 +23,8 @@ _BODY_DRIVER = "ParamBodyAngleX"
 
 # Skirt is modelled as a springy multi-zone cloth: each hem zone is a SpringPendulum driven by ALL
 # the relevant lower-body motion — body sway (primary) plus the nearest leg and body lean — so any
-# lower-body interaction swings the cloth. (output_param, extra_drivers, (mass, drag, length)).
-# Center is heavier/longer (more fabric); side zones lighter and coupled to their leg.
-_SKIRT_ZONES: list[tuple[str, list[str], tuple[float, float, float]]] = [
-    ("ParamSkirtL", ["ParamLegLA", "ParamBodyAngleZ"], (1.5, 0.28, 1.3)),
-    ("ParamSkirtC", ["ParamBodyAngleZ", "ParamBodyAngleY"], (1.8, 0.25, 1.5)),
-    ("ParamSkirtR", ["ParamLegRA", "ParamBodyAngleZ"], (1.5, 0.28, 1.3)),
-]
+# lower-body interaction swings the cloth. Zone windows, drivers, and geometry-scaled material all come
+# from core.structure.skirt (see skirt_zones / skirt_specs_from_params).
 
 
 def generate_physics(
@@ -59,18 +55,22 @@ def generate_physics(
                                        output_param=s.param_id, extra_drivers=head_extra,
                                        mass=s.mass, drag=s.drag, length=s.length))
 
-    # Skirt zones: primary driver = body sway (fall back to head turn if no body param at all).
+    # Skirt zones: primary driver = body sway (fall back to head turn if no body param at all). Material
+    # is geometry-scaled when meshes are threaded through (a longer/wider garment swings bigger/slower),
+    # else base tuning — identical for a reference-sized garment, so mesh-less callers stay compatible.
     primary = _BODY_DRIVER if _BODY_DRIVER in param_ids else (
         _HEAD_DRIVER if _HEAD_DRIVER in param_ids else None
     )
     if primary:
-        for output, extras, (mass, drag, length) in _SKIRT_ZONES:
-            if output not in param_ids:
+        zones = (skirt_zones(stack, meshes) if meshes is not None
+                 else skirt_specs_from_params(param_ids))
+        for z in zones:
+            if z.param_id not in param_ids:
                 continue
-            drivers = [e for e in extras if e in param_ids and e != primary]
+            drivers = [e for e in z.extra_drivers if e in param_ids and e != primary]
             rigs.append(PhysicsRig(
-                id=f"phys_{output}", driver_param=primary, output_param=output,
+                id=f"phys_{z.param_id}", driver_param=primary, output_param=z.param_id,
                 extra_drivers=drivers, model=PhysicsModel.spring_pendulum,
-                mass=mass, drag=drag, length=length,
+                mass=z.mass, drag=z.drag, length=z.length,
             ))
     return rigs

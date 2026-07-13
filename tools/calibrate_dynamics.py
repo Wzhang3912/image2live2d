@@ -75,12 +75,23 @@ def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Calibrate the dynamics score against a pro-model corpus.")
     ap.add_argument("--corpus", required=True, type=Path, help="path to the corpus manifest.json")
     ap.add_argument("--samples", type=int, default=None, help="probe grid size (default: module default)")
+    ap.add_argument("--verbose", action="store_true", help="list each part's verdict vs the label")
     args = ap.parse_args(argv)
 
     labeled = _load_labeled(args.corpus, args.samples)
     if not labeled:
         print("no labeled parts found in corpus", file=sys.stderr)
         return 1
+
+    if args.verbose:
+        from image2live2d.core.structure.calibrate import predicted_physics
+        print("part                     score  free  verdict   pro   result")
+        for d, truth in sorted(labeled, key=lambda x: (x[1], x[0].part_id)):
+            pred = predicted_physics(d)
+            tag = "ok" if pred == truth else ("MISS(fn)" if truth else "OVER(fp)")
+            print(f"  {d.part_id:22} {d.score:.2f}  {d.free_edge_ratio:.2f}  "
+                  f"{d.verdict.value:8} {'phys' if truth else 'rigid':5} {tag}")
+        print()
 
     at_default = evaluate(labeled)
     best = best_thresholds(labeled)

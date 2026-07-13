@@ -14,10 +14,16 @@ from .dynamics import (
     PartDynamics,
     PartProbe,
     PhysicalClass,
+    analyze_meshes,
     analyze_stack,
+    mesh_probes,
     score_dynamics,
 )
-from .appendages import AppendageSpec, accessory_appendages
+from .appendages import (
+    AppendageSpec,
+    accessory_appendages,
+    garment_appendages,
+)
 from .graph import (
     BODY,
     BODY_ROLES,
@@ -56,6 +62,8 @@ __all__ = [
     "PartDynamics",
     "score_dynamics",
     "analyze_stack",
+    "analyze_meshes",
+    "mesh_probes",
     "HEAD",
     "BODY",
     "HEAD_ROLES",
@@ -79,4 +87,5 @@ __all__ = [
     "skirt_specs_from_params",
     "AppendageSpec",
     "accessory_appendages",
+    "garment_appendages",
 ]

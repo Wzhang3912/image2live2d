@@ -34,6 +34,13 @@ from collections import defaultdict
 from dataclasses import dataclass
 
 from ..landmark import Landmarks
+from ..structure.graph import (
+    BODY,
+    HEAD,
+    build_rig_graph,
+)
+from ..structure.graph import BODY_ROLES as _BODY_ROLES
+from ..structure.graph import HEAD_ROLES as _HEAD_ROLES
 from ..types import LayerStack
 from ...irr.params import make_parameter
 from ...irr.schema import Deformer, Keyform, Mesh, Parameter, SemanticRole, Vec2
@@ -82,19 +89,8 @@ def detect_landmarks(stack: LayerStack) -> dict[str, tuple[float, float]]:
 # Authoring
 # --------------------------------------------------------------------------------------------------
 
-_HEAD_ROLES = {
-    SemanticRole.face_base, SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back,
-    SemanticRole.eyebrow_l, SemanticRole.eyebrow_r, SemanticRole.eye_l, SemanticRole.eye_r,
-    SemanticRole.eye_white_l, SemanticRole.eye_white_r, SemanticRole.pupil_l, SemanticRole.pupil_r,
-    SemanticRole.nose, SemanticRole.mouth, SemanticRole.ear_l, SemanticRole.ear_r,
-    SemanticRole.blush,
-}
-
-_BODY_ROLES = {
-    SemanticRole.neck, SemanticRole.torso, SemanticRole.arm_l, SemanticRole.arm_r,
-    SemanticRole.hand_l, SemanticRole.hand_r, SemanticRole.leg_l, SemanticRole.leg_r,
-    SemanticRole.clothing,
-}
+# The head/body role taxonomy now lives in core.structure.graph (imported above as _HEAD_ROLES /
+# _BODY_ROLES) so the RigGraph owns it and this stage consumes it.
 
 # Magnitudes at the extreme parameter value.
 _YAW_MAX = math.radians(26.0)    # ParamAngleX rotation of the head sphere at its extreme
@@ -204,8 +200,12 @@ def author_rig(
     # waist charm must follow the body. Reference is the FACE bbox expanded upward (headwear sits
     # above the forehead), NOT the full head bbox, so long back-hair draping to the waist doesn't
     # capture body accessories.
+    # Kinematic parenting is read off the RigGraph now: each accessory rides whichever structural
+    # group (head/body) its attachment point is nearest — the same rule as before, centralized there.
+    graph = build_rig_graph(stack, meshes, landmarks)
     accessories = members(SemanticRole.accessory)
-    head_acc, body_acc = _classify_accessories(accessories, members)
+    head_acc = [(pid, m) for pid, m in accessories if graph.parent_of(pid) == HEAD]
+    body_acc = [(pid, m) for pid, m in accessories if graph.parent_of(pid) == BODY]
 
     # --- Head turn (shared spherical warp) & tilt (rotation) ------------------------------------
     head = members(*_HEAD_ROLES) + head_acc
@@ -721,42 +721,6 @@ def _union_bbox(meshes: list[Mesh]) -> tuple[float, float, float, float]:
 def _union_center(meshes: list[Mesh]) -> Vec2:
     x0, y0, x1, y1 = _union_bbox(meshes)
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
-
-
-def _classify_accessories(accessories, members):
-    """Split accessory parts into (head_mounted, body_mounted) by nearest attachment.
-
-    Head ornaments must follow the head turn; body accessories must not. An accessory is bound to
-    whichever group (head parts vs body parts) is nearest to its **attachment point** — its top-centre,
-    where ornaments hang from. Using the attachment point (not the centre) is what lets a *dangling*
-    charm/earring, whose body hangs low by the neck but which attaches up at the side hair/ear, bind
-    to the head and turn with it. With no head (or no body) parts present, all accessories fall to the
-    side that exists. Model space is y-up, so the attachment point is (centre-x, max-y)."""
-    if not accessories:
-        return [], []
-    head_ref = [m for _, m in members(*_HEAD_ROLES)]
-    body_ref = [m for _, m in members(*_BODY_ROLES)]
-    if not head_ref:
-        return [], list(accessories)
-    if not body_ref:
-        return list(accessories), []
-    head_acc, body_acc = [], []
-    for pid, m in accessories:
-        x0, _, x1, y1 = _bbox(m.vertices)
-        ap = ((x0 + x1) / 2.0, y1)                       # attachment point: top-centre
-        dh = min(_point_bbox_dist(ap, _bbox(h.vertices)) for h in head_ref)
-        db = min(_point_bbox_dist(ap, _bbox(b.vertices)) for b in body_ref)
-        (head_acc if dh <= db else body_acc).append((pid, m))
-    return head_acc, body_acc
-
-
-def _point_bbox_dist(p: Vec2, box: tuple[float, float, float, float]) -> float:
-    """Euclidean distance from point ``p`` to an axis-aligned bbox (0 if inside)."""
-    px, py = p
-    x0, y0, x1, y1 = box
-    dx = max(x0 - px, 0.0, px - x1)
-    dy = max(y0 - py, 0.0, py - y1)
-    return math.hypot(dx, dy)
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

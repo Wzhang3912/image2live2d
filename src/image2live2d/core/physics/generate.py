@@ -9,17 +9,13 @@ the result always satisfies the IRR's referential integrity.
 
 from __future__ import annotations
 
+from ..structure.strands import hair_specs_from_params, hair_strands
 from ..types import LayerStack
-from ...irr.schema import Parameter, PhysicsModel, PhysicsRig
+from ...irr.schema import Mesh, Parameter, PhysicsModel, PhysicsRig
 
-# output param -> (mass, drag, length): back hair is heavier/slower, front fringe lighter/snappier.
-# Tuned for VISIBLE secondary motion (the hair reads as "alive"): higher mass -> more lag behind the head,
-# lower drag -> the strand keeps swinging and settles slowly (follow-through), longer length -> bigger arc.
-_HAIR_TUNING: dict[str, tuple[float, float, float]] = {
-    "ParamHairFront": (1.1, 0.10, 1.05),   # light fringe: quick to react but with a visible settle
-    "ParamHairSide": (1.4, 0.08, 1.30),
-    "ParamHairBack": (2.0, 0.06, 1.70),    # heavy back hair: big, slow, long-settling swing
-}
+# Per-strand hair tuning (base values + geometry scaling) now lives in core.structure.strands so
+# author_rig and this stage agree on the strand param ids. Back hair is heavier/slower, front fringe
+# lighter/snappier: higher mass -> more lag behind the head, lower drag -> longer follow-through.
 _HEAD_DRIVER = "ParamAngleX"  # head turn drives hair sway
 
 _BODY_DRIVER = "ParamBodyAngleX"
@@ -35,26 +31,33 @@ _SKIRT_ZONES: list[tuple[str, list[str], tuple[float, float, float]]] = [
 ]
 
 
-def generate_physics(stack: LayerStack, parameters: list[Parameter]) -> list[PhysicsRig]:
+def generate_physics(
+    stack: LayerStack, parameters: list[Parameter], *, meshes: list[Mesh] | None = None,
+) -> list[PhysicsRig]:
     """Create pendulum ``PhysicsRig`` entries for each hair/cloth output parameter that was authored.
 
     ``parameters`` is the authored parameter list (from ``author_rig``); a rig is only created when
     its driver and output parameters actually exist (keeping the IRR's referential integrity intact).
-    Hair = rigid pendulums driven by head turn; skirt = springy multi-zone cloth driven by the whole
-    lower body.
+    Hair = one pendulum per strand driven by head turn; skirt = springy multi-zone cloth driven by the
+    whole lower body. When ``meshes`` are supplied, each strand's mass/length is geometry-scaled (a
+    longer tail lags more); without them the strand's base (role) tuning is used — identical for a
+    single strand, so callers that don't thread meshes stay byte-compatible.
     """
     param_ids = {p.id for p in parameters}
     rigs: list[PhysicsRig] = []
 
     if _HEAD_DRIVER in param_ids:
         # Hair reacts to the WHOLE head turn: yaw (X, primary) + pitch (Y) + roll (Z). The emitter
-        # maps pitch to vertical anchor motion so a nod bobs the hair, not just a side sway.
+        # maps pitch to vertical anchor motion so a nod bobs the hair, not just a side sway. One
+        # pendulum per strand (P2) so twin-tails / fringe swing independently.
         head_extra = [d for d in ("ParamAngleY", "ParamAngleZ") if d in param_ids]
-        for output, (mass, drag, length) in _HAIR_TUNING.items():
-            if output in param_ids:
-                rigs.append(PhysicsRig(id=f"phys_{output}", driver_param=_HEAD_DRIVER,
-                                       output_param=output, extra_drivers=head_extra,
-                                       mass=mass, drag=drag, length=length))
+        specs = (hair_strands(stack, meshes) if meshes is not None
+                 else hair_specs_from_params(param_ids))
+        for s in specs:
+            if s.param_id in param_ids:
+                rigs.append(PhysicsRig(id=f"phys_{s.param_id}", driver_param=_HEAD_DRIVER,
+                                       output_param=s.param_id, extra_drivers=head_extra,
+                                       mass=s.mass, drag=s.drag, length=s.length))
 
     # Skirt zones: primary driver = body sway (fall back to head turn if no body param at all).
     primary = _BODY_DRIVER if _BODY_DRIVER in param_ids else (

@@ -41,6 +41,7 @@ from ..structure.graph import (
 )
 from ..structure.graph import BODY_ROLES as _BODY_ROLES
 from ..structure.graph import HEAD_ROLES as _HEAD_ROLES
+from ..structure.strands import hair_strands
 from ..types import LayerStack
 from ...irr.params import make_parameter
 from ...irr.schema import Deformer, Keyform, Mesh, Parameter, SemanticRole, Vec2
@@ -244,14 +245,11 @@ def author_rig(
         params.append(_brow("ParamBrowRY", brow_r))
 
     # --- Hair sway (physics OUTPUT params; the physics rig drives these) ------------------------
-    for role, pid in (
-        (SemanticRole.hair_front, "ParamHairFront"),
-        (SemanticRole.hair_side, "ParamHairSide"),
-        (SemanticRole.hair_back, "ParamHairBack"),
-    ):
-        strands = members(role)
-        if strands:
-            params.append(_hair_sway(pid, strands))
+    # P2: one param per hair PART (strand), not one per role — so twin-tails / a ponytail + fringe
+    # each swing on their own param (and their own pendulum). A single part of a role keeps the base
+    # id, so single-strand characters are unchanged. See core.structure.strands.hair_strands.
+    for spec in hair_strands(stack, meshes):
+        params.append(_hair_sway(spec.param_id, [(spec.part_id, mesh_by_part[spec.part_id])]))
 
     # --- Cloth/skirt hem sway, split into L/C/R zones (physics OUTPUT params) --------------------
     # Each zone swings a windowed strip of the hem; overlapping triangular windows keep the cloth

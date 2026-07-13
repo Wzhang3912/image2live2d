@@ -18,6 +18,13 @@ The judgment is reduced to detectable signals, combined into a continuous **dyna
   * **slenderness** — long thin things swing (strands); compact things don't (mesh/occupancy PCA).
   * **material prior** — a weak nudge from role + name hints (``bow``/``ribbon``/``tail``/``skirt``…).
 
+Two further signals from the plan — **attachment fraction** (how pinned the boundary is) and
+**depth/layer isolation** (how much of the footprint is the part's own vs backed by others) — are also
+computed per part (a complete feature vector for calibration / a future learned classifier) but are
+*not* combined into the score: measured against a real pro rig they carry no discriminative power, and
+depth-isolation is in fact inverted on hand rigs (rigged parts are the more layered ones). See the note
+on ``_score_one``.
+
 A high score → gets physics; a middle band → gentle motion only; low → rigid. The threshold is biased
 toward **restraint** (over-rigging reads as cheap jitter), with the free-edge detector as a safety net
 so an obviously-hanging free edge is never left dead. Dynamic parts are also given a **physical class**
@@ -154,6 +161,14 @@ class PartDynamics:
     score: float             # 0..1 — combined dynamics score
     verdict: DynamicsVerdict
     physical_class: PhysicalClass
+    # The plan's remaining two signals (attachment fraction + depth/layer isolation), computed for a
+    # complete feature vector but NOT folded into `score` — measured on a real pro rig they add no
+    # discriminative power (see the note on `_score_one`). Exposed for QA / calibration / future ML.
+    attachment_fraction: float = 0.0   # attached / exposed boundary (0..1). How pinned it is — the
+    #                                    complement of free_edge_ratio; the swing-relevant *position*
+    #                                    of the attachment is carried by `anchor`.
+    depth_isolation: float = 0.0       # 1 - overlap (0..1). 1 = the footprint is the part's own (floats
+    #                                    free); 0 = fully backed by other parts.
 
 
 # --------------------------------------------------------------------------------------------------
@@ -251,6 +266,7 @@ def _score_one(
     au = av = 0.0            # attachment centroid accumulators (of the part's own attached cells)
     an = 0
     ncov = 0                 # occupied cells
+    shared = 0               # occupied cells this part shares with >=1 other part (for depth isolation)
     su = sv = suu = svv = suv = 0.0
     vmin, vmax = math.inf, -math.inf
 
@@ -262,6 +278,8 @@ def _score_one(
                 continue
             u = (i + 0.5) / n
             ncov += 1
+            if total[j][i] >= 2:
+                shared += 1
             su += u
             sv += v
             suu += u * u
@@ -292,6 +310,11 @@ def _score_one(
 
     exposed = free_edges + attached_edges
     free_edge_ratio = (free_edges / exposed) if exposed else 0.0
+    # The plan's remaining two signals — diagnostics only (see the return + module note on why they are
+    # NOT in `score`). attachment_fraction is the pinned complement of free-edge; depth_isolation is how
+    # much of the part's footprint is its own vs backed by other parts.
+    attachment_fraction = (attached_edges / exposed) if exposed else 0.0
+    depth_isolation = 1.0 - (shared / ncov)
 
     cu, cv = su / ncov, sv / ncov
     # Slenderness + orientation from the occupied-cell covariance (in model space: y up -> flip v).
@@ -337,12 +360,21 @@ def _score_one(
     verdict = _verdict(score, free_edge_ratio, eligible)
     phys = _physical_class(verdict, slenderness, cantilever)
 
+    # NOTE — attachment_fraction / depth_isolation complete the plan's six-signal list but are
+    # deliberately absent from `score`. Measured on a real pro rig (Akari, via tools/calibrate_moc3):
+    # attachment_fraction ranks physics vs non-physics parts at AUC≈0.50 (chance — it is 1-free_edge,
+    # and free-edge itself collapses on a dense rig), and depth_isolation at AUC≈0.43 — *inverted*: on a
+    # hand rig the parts the artist gave physics are the MORE layered ones (a strand is backed by its own
+    # shade/highlight/back meshes), the opposite of the plan's "isolated part floats free" intuition.
+    # Blending either into free-edge moved AUC by <0.03. So they ship as diagnostics for QA /
+    # calibration / a future learned classifier, not as score terms — keeping the score byte-identical.
     return PartDynamics(
         part_id=probe.part_id, role=probe.role,
         free_edge_ratio=free_edge_ratio, cantilever=cantilever, slenderness=slenderness,
         principal_angle=principal_angle, material_prior=material, anchor=anchor,
         coverage=ncov / (n * n), sway_eligible=eligible, score=score,
         verdict=verdict, physical_class=phys,
+        attachment_fraction=attachment_fraction, depth_isolation=depth_isolation,
     )
 
 

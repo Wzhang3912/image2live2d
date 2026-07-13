@@ -6,10 +6,13 @@ with known scores stand in for a corpus.
 from __future__ import annotations
 
 from image2live2d.core.structure import (
+    Metrics,
     best_thresholds,
     evaluate,
     physics3_output_params,
+    pool_metrics,
     predicted_physics,
+    roc_auc,
     sweep,
 )
 from image2live2d.core.structure.dynamics import (
@@ -77,3 +80,26 @@ def test_sweep_tie_breaks_toward_restraint():
     labeled = [(_dyn("hi", 0.80), True), (_dyn("lo", 0.10), False)]
     ranked = [p for p in sweep(labeled) if p.metrics.f1 == 1.0]
     assert ranked[0].gentle_t == max(p.gentle_t for p in ranked)
+
+
+def test_pool_metrics_sums_confusion_across_models():
+    # each model's confusion counts are independent decisions -> pooling is a straight sum.
+    a = Metrics(tp=3, fp=1, fn=1, tn=5)     # precision 0.75, recall 0.75
+    b = Metrics(tp=1, fp=1, fn=3, tn=5)     # precision 0.50, recall 0.25
+    pooled = pool_metrics([a, b])
+    assert (pooled.tp, pooled.fp, pooled.fn, pooled.tn) == (4, 2, 4, 10)
+    assert pooled.precision == 4 / 6 and pooled.recall == 4 / 8
+    assert pool_metrics([]) == Metrics(0, 0, 0, 0)   # empty corpus -> zero confusion
+
+
+def test_roc_auc_ranking_agreement():
+    # rigged parts all score above rigid ones -> perfect ranking (1.0), regardless of any threshold.
+    labeled = [(_dyn("p1", 0.6), True), (_dyn("p2", 0.7), True),
+               (_dyn("n1", 0.2), False), (_dyn("n2", 0.3), False)]
+    assert roc_auc(labeled) == 1.0
+    # fully inverted ranking -> 0.0; a tie between one pos and one neg -> 0.5 (chance).
+    assert roc_auc([(_dyn("p", 0.1), True), (_dyn("n", 0.9), False)]) == 0.0
+    assert roc_auc([(_dyn("p", 0.5), True), (_dyn("n", 0.5), False)]) == 0.5
+    # undefined when a class is empty (can't rank rigged vs non-rigged with only one class present)
+    assert roc_auc([(_dyn("p", 0.5), True)]) is None
+    assert roc_auc([]) is None

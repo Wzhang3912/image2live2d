@@ -66,7 +66,10 @@ _SHEET_CANT = 0.4      # cantilever at/above which a non-slender dynamic part is
 
 # --- Verdict thresholds (biased toward restraint) ---------------------------------------------------
 _DYNAMIC_T = 0.55      # score >= this -> full physics
-_GENTLE_T = 0.33       # score in [_GENTLE_T, _DYNAMIC_T) -> gentle motion only
+_GENTLE_T = 0.30       # score in [_GENTLE_T, _DYNAMIC_T) -> gentle motion only. Lowered 0.33 -> 0.30
+#                        per P1b calibration on the (our-domain) taste corpus: at 0.33 a hair strand
+#                        tucked against the head (low free edge, score ~0.30) was left dead; 0.30
+#                        recovers it with no new false positives on that corpus.
 _FREE_EDGE_FLOOR = 0.6  # safety net: an eligible part with this much free edge gets >= gentle motion
 #                         even if its score fell just short — never leave an obvious hanging edge dead.
 

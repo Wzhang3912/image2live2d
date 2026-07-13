@@ -27,6 +27,14 @@ from .graph import (
     analyze_structure,
     build_rig_graph,
 )
+from .strands import (
+    HAIR_BASE_TUNING,
+    HAIR_DRIVER,
+    StrandSpec,
+    hair_specs_from_params,
+    hair_strands,
+    strand_param_id,
+)
 
 __all__ = [
     "AlphaSampler",
@@ -46,4 +54,10 @@ __all__ = [
     "RigGraph",
     "build_rig_graph",
     "analyze_structure",
+    "HAIR_BASE_TUNING",
+    "HAIR_DRIVER",
+    "StrandSpec",
+    "hair_strands",
+    "hair_specs_from_params",
+    "strand_param_id",
 ]

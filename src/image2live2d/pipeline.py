@@ -30,7 +30,7 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     template = select_template(stack)
     landmarks = _safe_landmarks(stack)
     authoring = author_rig(stack, meshes, template, landmarks=landmarks)
-    phys = _safe_physics(stack, authoring.parameters)
+    phys = _safe_physics(stack, authoring.parameters, meshes)
     anims = motion.generate_idle(authoring.parameters)
     return assemble_rig(
         name=name,
@@ -99,10 +99,10 @@ def _lift_occluded_accessories(stack: LayerStack, meshes) -> None:
             L.draw_order = nxt
 
 
-def _safe_physics(stack: LayerStack, parameters):
+def _safe_physics(stack: LayerStack, parameters, meshes=None):
     """Tolerate a not-yet-implemented physics stage so the spine still runs end-to-end."""
     try:
-        return physics.generate_physics(stack, parameters)
+        return physics.generate_physics(stack, parameters, meshes=meshes)
     except NotImplementedError:
         return []
 

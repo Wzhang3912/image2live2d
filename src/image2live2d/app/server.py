@@ -397,7 +397,8 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
 
     def s_physics():
         try:
-            ctx["physics"] = physics.generate_physics(ctx["stack"], ctx["auth"].parameters)
+            ctx["physics"] = physics.generate_physics(
+                ctx["stack"], ctx["auth"].parameters, meshes=ctx["meshes"])
         except NotImplementedError:
             ctx["physics"] = []
         job.physics = ctx["physics"]

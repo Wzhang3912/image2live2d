@@ -69,6 +69,41 @@ class SweepPoint:
     metrics: Metrics
 
 
+def pool_metrics(per_model: Iterable[Metrics]) -> Metrics:
+    """Pool several models' confusion counts into one corpus-wide :class:`Metrics`.
+
+    Confusion counts are **additive across models** — a false positive on model A and a true positive
+    on model B are just two independent decisions — so summing tp/fp/fn/tn gives the honest corpus-wide
+    precision/recall. (Contrast a raw *score* AUC, which is NOT poolable across models: each rig's score
+    distribution has its own scale, so mixing raw scores compares apples to oranges. Pool the decisions,
+    not the scores.)"""
+    tp = fp = fn = tn = 0
+    for m in per_model:
+        tp += m.tp
+        fp += m.fp
+        fn += m.fn
+        tn += m.tn
+    return Metrics(tp, fp, fn, tn)
+
+
+def roc_auc(labeled: Iterable[tuple[PartDynamics, bool]]) -> float | None:
+    """Threshold-free ranking agreement: the probability our raw ``score`` ranks a random rigged part
+    above a random non-rigged one (ties count as ½). 1.0 = perfect separation, 0.5 = chance.
+
+    Unlike :func:`evaluate` this needs no threshold *and no role gate*, so it measures the pure
+    discriminative power of the geometry score — useful when a model's drawables can't be assigned roles
+    (opaque ``ArtMesh`` ids) but ground-truth physics can still be read. Returns ``None`` if either class
+    is empty (agreement undefined). Score it **within one model**: raw scores are not comparable across
+    rigs, so pool AUC by averaging per-model values, never by mixing raw scores (see :func:`pool_metrics`
+    for why decisions pool but scores don't)."""
+    pos = [d.score for d, t in labeled if t]
+    neg = [d.score for d, t in labeled if not t]
+    if not pos or not neg:
+        return None
+    wins = sum((p > n) + 0.5 * (p == n) for p in pos for n in neg)
+    return wins / (len(pos) * len(neg))
+
+
 def physics3_output_params(doc: dict) -> set[str]:
     """The set of *output* (physics-driven) parameter ids in a parsed Live2D ``.physics3.json`` — i.e.
     exactly the parameters the artist attached physics to. This is the corpus ground truth: a part is

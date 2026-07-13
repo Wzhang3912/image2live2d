@@ -30,7 +30,9 @@ from .calibrate import (
     best_thresholds,
     evaluate,
     physics3_output_params,
+    pool_metrics,
     predicted_physics,
+    roc_auc,
     sweep,
 )
 from .graph import (
@@ -108,4 +110,6 @@ __all__ = [
     "evaluate",
     "sweep",
     "best_thresholds",
+    "pool_metrics",
+    "roc_auc",
 ]

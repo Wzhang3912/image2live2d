@@ -98,6 +98,37 @@ def test_name_hint_boosts_material_prior():
     assert d.verdict is DynamicsVerdict.dynamic   # lone part: every edge is free
 
 
+def test_attachment_fraction_complements_free_edge():
+    # attachment_fraction is the pinned complement of the free-edge ratio (attached vs free boundary).
+    d = _by_id()
+    for part in ("side_hair", "collar", "skirt"):
+        assert abs(d[part].attachment_fraction - (1.0 - d[part].free_edge_ratio)) < 1e-9
+    # an enclosed collar is mostly pinned; a hanging strand is much freer.
+    assert d["collar"].attachment_fraction > 0.6
+    assert d["side_hair"].attachment_fraction < d["collar"].attachment_fraction
+
+
+def test_depth_isolation_backed_vs_free():
+    d = _by_id()
+    for part in d.values():
+        assert 0.0 <= part.depth_isolation <= 1.0
+    # the collar sits under the head + torso (its footprint is backed) -> low isolation; the strand's
+    # footprint is largely its own -> higher.
+    assert d["collar"].depth_isolation < d["side_hair"].depth_isolation
+    # a lone part shares its footprint with nothing -> fully isolated.
+    [solo] = score_dynamics([PartProbe("solo", R.hair_side, rect(0.4, 0.6, 0.1, 0.6))], samples=80)
+    assert solo.depth_isolation == 1.0
+
+
+def test_new_signals_do_not_change_the_score():
+    # attachment_fraction / depth_isolation are diagnostics, never score terms: the score for a lone
+    # strand is exactly the free/cantilever/slender/material blend, unaffected by the new fields.
+    [d] = score_dynamics([PartProbe("strand", R.hair_side, rect(0.48, 0.52, 0.10, 0.95))], samples=80)
+    expected = (0.45 * d.free_edge_ratio + 0.30 * d.cantilever
+                + 0.15 * min((d.slenderness - 1.0) / 3.0, 1.0) + 0.10 * d.material_prior)
+    assert abs(d.score - expected) < 1e-9
+
+
 def test_samples_floor():
     with pytest.raises(ValueError):
         score_dynamics(_scene(), samples=1)

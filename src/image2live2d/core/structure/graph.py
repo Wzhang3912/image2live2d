@@ -41,12 +41,24 @@ BODY_ROLES: frozenset[SemanticRole] = frozenset({
 
 HEAD = "head"
 BODY = "body"
+# Limb structural groups. A garment appendage that sits *over* an arm (a sleeve/cuff) rides that arm's
+# articulation rather than the body sway — the P4 "sleeve→arm" parenting. Kept distinct from BODY so the
+# garment planner can pick the arm's motion param (ParamArm*) as the pendulum driver.
+ARM_L = "arm_l"
+ARM_R = "arm_r"
+
+# A clothing part is bound to an arm only when its footprint sits *predominantly* over that arm — a real
+# sleeve/cuff is mostly on the arm, whereas a bodice/top is mostly over the torso. The overlap must both
+# clear this floor AND exceed the part's overlap with the torso, so an ordinary torso garment (the whole
+# existing wardrobe) is never captured and stays on the body — keeping current output byte-identical.
+_SLEEVE_ARM_OVERLAP_MIN = 0.5
 
 
 @dataclass
 class RigNode:
-    """One movable part in the graph. ``parent`` is the structural group it rides (``HEAD``/``BODY``,
-    or ``None`` for background/other). Dynamics fields are ``None`` until alpha analysis fills them."""
+    """One movable part in the graph. ``parent`` is the structural group it rides (``HEAD``/``BODY``/
+    ``ARM_L``/``ARM_R``, or ``None`` for background/other). Dynamics fields are ``None`` until alpha
+    analysis fills them."""
 
     part_id: str
     role: SemanticRole
@@ -115,6 +127,13 @@ def build_rig_graph(
                 if ly.id in mesh_by_part and ly.semantic_role in HEAD_ROLES]
     body_ref = [mesh_by_part[ly.id] for ly in stack.layers
                 if ly.id in mesh_by_part and ly.semantic_role in BODY_ROLES]
+    # References for the sleeve→arm split: each arm's footprint, and the torso core to compare against.
+    arm_ref = {ARM_L: [mesh_by_part[ly.id].vertices for ly in stack.layers
+                       if ly.id in mesh_by_part and ly.semantic_role is SemanticRole.arm_l],
+               ARM_R: [mesh_by_part[ly.id].vertices for ly in stack.layers
+                       if ly.id in mesh_by_part and ly.semantic_role is SemanticRole.arm_r]}
+    torso_ref = [mesh_by_part[ly.id].vertices for ly in stack.layers
+                 if ly.id in mesh_by_part and ly.semantic_role in (SemanticRole.torso, SemanticRole.neck)]
 
     nodes: list[RigNode] = []
     for layer in stack.layers:
@@ -127,6 +146,8 @@ def build_rig_graph(
         role = layer.semantic_role
         if role in HEAD_ROLES:
             parent: str | None = HEAD
+        elif role is SemanticRole.clothing:
+            parent = _sleeve_arm(box, arm_ref, torso_ref) or BODY   # a sleeve rides its arm, else body
         elif role in BODY_ROLES:
             parent = BODY
         elif role is SemanticRole.accessory:
@@ -135,6 +156,38 @@ def build_rig_graph(
             parent = None                            # background / other
         nodes.append(RigNode(part_id=layer.id, role=role, parent=parent, anchor=anchor, bbox=box))
     return RigGraph(nodes)
+
+
+def _bbox_overlap_frac(box: tuple[float, float, float, float], verts: list[Vec2]) -> float:
+    """Fraction of ``box``'s area that lies inside the bounding box of ``verts`` (0 if no overlap)."""
+    if not verts:
+        return 0.0
+    ox0, oy0, ox1, oy1 = _bbox(verts)
+    bx0, by0, bx1, by1 = box
+    iw = max(0.0, min(bx1, ox1) - max(bx0, ox0))
+    ih = max(0.0, min(by1, oy1) - max(by0, oy0))
+    area = max((bx1 - bx0) * (by1 - by0), 1e-12)
+    return (iw * ih) / area
+
+
+def _sleeve_arm(
+    box: tuple[float, float, float, float],
+    arm_ref: dict[str, list[list[Vec2]]],
+    torso_ref: list[list[Vec2]],
+) -> str | None:
+    """Bind a clothing part to an arm when it sits *predominantly* over that arm — the sleeve/cuff case.
+
+    Returns ``ARM_L``/``ARM_R`` only if the part's footprint overlaps an arm by at least
+    ``_SLEEVE_ARM_OVERLAP_MIN`` of its own area *and* more than it overlaps the torso; otherwise ``None``
+    (the caller falls back to the body). This is deliberately strict so an ordinary torso garment — which
+    sits over the torso, not an arm — is never captured, leaving the existing wardrobe on the body."""
+    torso_ov = max((_bbox_overlap_frac(box, v) for v in torso_ref), default=0.0)
+    best_side, best_ov = None, _SLEEVE_ARM_OVERLAP_MIN
+    for side, groups in arm_ref.items():
+        ov = max((_bbox_overlap_frac(box, v) for v in groups), default=0.0)
+        if ov >= best_ov and ov > torso_ov:
+            best_side, best_ov = side, ov
+    return best_side
 
 
 def _accessory_parent(anchor: Vec2, head_ref: list[Mesh], body_ref: list[Mesh]) -> str:

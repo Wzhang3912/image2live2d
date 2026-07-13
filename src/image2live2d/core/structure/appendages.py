@@ -28,7 +28,7 @@ from dataclasses import dataclass, field
 from ..types import LayerStack
 from ...irr.schema import Mesh, SemanticRole
 from .dynamics import DynamicsVerdict, analyze_meshes
-from .graph import BODY, HEAD, RigGraph
+from .graph import ARM_L, ARM_R, BODY, HEAD, RigGraph
 from .skirt import _skirtable
 
 # Gentle light pendulum base for an ornament (mass, drag, length): quick to react, short arc, quick to
@@ -40,10 +40,15 @@ _ACC_TUNING = (0.9, 0.14, 0.9)
 _GARMENT_TUNING = (1.2, 0.20, 1.1)
 
 # Per parent group: (primary driver, extra drivers). A head ornament rides the head turn; a body
-# ornament the body sway. Extras (pitch/roll) enrich the motion and are present-gated downstream.
+# ornament the body sway; a sleeve/cuff rides its ARM's articulation (swing about the shoulder as the
+# primary driver, the elbow bend as an extra) so it lags and flares off the arm instead of the torso.
+# Extras (pitch/roll, elbow) enrich the motion and are present-gated downstream (an arm's params only
+# exist when the limb was articulated, so an arm-driven pendulum simply isn't wired if the arm is rigid).
 _PARENT_CFG: dict[str, tuple[str, tuple[str, ...]]] = {
     HEAD: ("ParamAngleX", ("ParamAngleY", "ParamAngleZ")),
     BODY: ("ParamBodyAngleX", ("ParamBodyAngleY", "ParamBodyAngleZ")),
+    ARM_L: ("ParamArmLA", ("ParamArmLB",)),
+    ARM_R: ("ParamArmRA", ("ParamArmRB",)),
 }
 
 

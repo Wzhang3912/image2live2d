@@ -249,7 +249,8 @@ def author_rig(
     # each swing on their own param (and their own pendulum). A single part of a role keeps the base
     # id, so single-strand characters are unchanged. See core.structure.strands.hair_strands.
     for spec in hair_strands(stack, meshes):
-        params.append(_hair_sway(spec.param_id, [(spec.part_id, mesh_by_part[spec.part_id])]))
+        params.append(_hair_sway(spec.param_id, spec.part_id,
+                                 mesh_by_part[spec.part_id], spec.vertex_indices))
 
     # --- Cloth/skirt hem sway, split into L/C/R zones (physics OUTPUT params) --------------------
     # Each zone swings a windowed strip of the hem; overlapping triangular windows keep the cloth
@@ -535,16 +536,24 @@ def _limb_bend(param_id: str, limb: list[tuple[str, Mesh]], elbow: Vec2, end: Ve
     return _tri(param_id, at)
 
 
-def _hair_sway(param_id: str, group: list[tuple[str, Mesh]], *, amount: float = _HAIR_SWAY) -> Parameter:
-    """Pendulum OUTPUT param: tips/hem swing horizontally, roots (top) stay. The physics rig drives
-    this from head/body motion; it is also a normal driveable parameter. Used for hair and (with a
-    gentler ``amount``) for a skirt hem."""
+def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | None = None,
+               *, amount: float = _HAIR_SWAY) -> Parameter:
+    """Pendulum OUTPUT param for one hair strand: tips swing horizontally, roots (top) stay. The
+    physics rig drives this from head/body motion; it is also a normal driveable parameter.
+
+    ``indices`` (a strand's own vertices, e.g. one lobe of a shared mesh) restricts the sway to those
+    vertices — the rest of the part is held at zero — so lobes of one part swing independently and the
+    strand hangs from its *own* top. ``None`` sways the whole mesh (the single-lobe case)."""
+    verts = mesh.vertices
+    owned = range(len(verts)) if indices is None else indices
+    _, _, _, top = _bbox([verts[i] for i in owned])
+
     def at(sign: float) -> dict[str, list[Vec2]]:
-        offs: dict[str, list[Vec2]] = {}
-        for pid, m in group:
-            _, _, _, top = _bbox(m.vertices)
-            offs[pid] = [(sign * amount * (top - y), 0.0) for _, y in m.vertices]
-        return offs
+        cell: list[Vec2] = [(0.0, 0.0)] * len(verts)
+        for vi in owned:
+            _, y = verts[vi]
+            cell[vi] = (sign * amount * (top - y), 0.0)
+        return {part_id: cell}
 
     return _tri(param_id, at)
 

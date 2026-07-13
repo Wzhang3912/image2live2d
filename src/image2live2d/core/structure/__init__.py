@@ -24,6 +24,15 @@ from .appendages import (
     accessory_appendages,
     garment_appendages,
 )
+from .calibrate import (
+    Metrics,
+    SweepPoint,
+    best_thresholds,
+    evaluate,
+    physics3_output_params,
+    predicted_physics,
+    sweep,
+)
 from .graph import (
     BODY,
     BODY_ROLES,
@@ -88,4 +97,11 @@ __all__ = [
     "AppendageSpec",
     "accessory_appendages",
     "garment_appendages",
+    "Metrics",
+    "SweepPoint",
+    "physics3_output_params",
+    "predicted_physics",
+    "evaluate",
+    "sweep",
+    "best_thresholds",
 ]

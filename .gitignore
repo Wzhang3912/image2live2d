@@ -55,6 +55,14 @@ out/
 *.moc3
 *.cmo3
 
+# Pro Live2D model configs — copyrighted; used only as a LOCAL calibration corpus (see
+# tools/calibrate_dynamics.py). Keep the repo code-only.
+*.physics3.json
+*.model3.json
+*.cdi3.json
+*.motion3.json
+corpus/
+
 # OS / editor
 .DS_Store
 .idea/

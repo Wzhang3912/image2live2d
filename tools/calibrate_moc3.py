@@ -13,14 +13,18 @@ children. Roles (for the sway-eligibility gate) are likewise inferred from drawa
 heuristics are model-naming-dependent and best-effort — this measures a real rig, but treat the exact
 number as indicative, not gospel.
 
-FINDING (Akari, VTS): even after merging segments into parts, the score under-detects badly — the
-physics parts (hair strands, tie, skirt) read ``free_edge≈0`` because a production rig LAYERS dozens of
-shade/overlay/back meshes behind every part, so the free-edge "opens into void" cue (our decisive
-signal) never fires: something always fills the gap. Our score is tuned for the SPARSE, non-overlapping
-parts our decomposer emits from a flat image, not a hand-rig's dense internal layering. A faithful
-pro-model calibration therefore needs *representation alignment* first — flatten each semantic part to a
-single silhouette against a transparent background (as our decomposer produces) before scoring. Until
-then, do NOT transfer thresholds from a raw drawable dump; this tool is the harness + the evidence.
+FINDING (Akari, VTS): the score under-detects badly on a production rig. Even after merging segments
+into parts, the physics parts (hair strands, tie, skirt) read ``free_edge≈0`` because the rig LAYERS
+dozens of shade/overlay/back meshes behind every part, so the free-edge "opens into void" cue (our
+decisive signal, weight 0.45) never fires — something always fills the gap. ``--align`` collapses the
+coincident depth layers (align_pro_model, IoU merge) and lifts recall a little (0.08 → 0.17), but it
+PLATEAUS: the dominant backing is spatially-*offset* layers (back-hair behind front-hair) that are
+legitimately different regions and can't be safely merged by geometry alone. Conclusion: the free-edge
+cue is *representation-specific* — it works on the SPARSE, non-overlapping parts our decomposer emits
+from a flat image, not on a hand-rig's dense layering, and geometry-only alignment can't fully recover
+it. A robust cross-representation score would down-weight free-edge when scene density is high and lean
+on cantilever/slenderness. Do NOT transfer thresholds from a real drawable dump; this ships the harness,
+the alignment transform, and the evidence for that limit.
 
     python tools/calibrate_moc3.py path/to/model.moc3 path/to/model.physics3.json [--verbose]
 
@@ -39,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "src"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+from align_pro_model import merge_overlapping, rasterize_cells  # noqa: E402
 from cubism_core import Model  # noqa: E402
 from image2live2d.core.structure.calibrate import best_thresholds, evaluate  # noqa: E402
 from image2live2d.core.structure.dynamics import analyze_meshes  # noqa: E402
@@ -115,8 +120,19 @@ def _has_physics(did: str, stems: set[str]) -> bool:
     return False
 
 
-def build_corpus(moc3: Path, physics3: Path, core: str | None):
-    """(labeled dynamics, skipped-count). Each label is (PartDynamics, pro_has_physics)."""
+def _dominant_role(members):
+    """The role of the first member (largest first) that has an inferable role, else None."""
+    for m in members:
+        r = _role_of(m)
+        if r is not None:
+            return r
+    return None
+
+
+def build_corpus(moc3: Path, physics3: Path, core: str | None, *, align: bool = False, res: int = 64):
+    """(labeled dynamics, skipped-count). Each label is (PartDynamics, pro_has_physics). With
+    ``align``, depth-layered parts that heavily overlap are merged into one spatial region first (see
+    align_pro_model) so the free-edge cue isn't defeated by a rig's stacked shade/back layers."""
     model = Model(str(moc3), core)
     draws = model.drawables()
     out_params = {o["Destination"]["Id"]
@@ -124,8 +140,8 @@ def build_corpus(moc3: Path, physics3: Path, core: str | None):
                   for o in s.get("Output", []) or []}
     stems = physics_target_stems(out_params)
 
-    # Merge fine drawables into parts (our pipeline's granularity), concatenating vertices and offsetting
-    # each drawable's triangle indices into the merged vertex list.
+    # Merge fine drawables into parts by name (our pipeline's granularity), concatenating vertices and
+    # offsetting each drawable's triangle indices into the merged vertex list.
     parts: dict[str, dict] = {}
     skipped = 0
     for i, d in enumerate(draws):
@@ -139,25 +155,39 @@ def build_corpus(moc3: Path, physics3: Path, core: str | None):
         part["tris"].extend((a + base, b + base, c + base) for a, b, c in d.triangles)
 
     # Normalise all part vertices into a shared [0,1] frame (y already up in Cubism space) so the free-
-    # edge detector sees one canvas; drop parts with no inferable role.
+    # edge detector — and the overlap rasteriser — see one canvas.
     allv = [v for p in parts.values() for v in p["verts"]]
     xs = [x for x, _ in allv]
     ys = [y for _, y in allv]
     minx, maxx, miny, maxy = min(xs), max(xs), min(ys), max(ys)
     sx, sy = max(maxx - minx, 1e-6), max(maxy - miny, 1e-6)
+    for p in parts.values():
+        p["nverts"] = [((x - minx) / sx, (y - miny) / sy) for x, y in p["verts"]]
+
+    # Optionally collapse depth layers: parts whose footprints heavily overlap become one region.
+    if align:
+        cells = {k: rasterize_cells(p["nverts"], p["tris"], res) for k, p in parts.items()}
+        groups = merge_overlapping(cells, thresh=0.5)
+    else:
+        groups = [[k] for k in parts]
 
     layers, meshes, want = [], [], {}
-    for key, part in parts.items():
-        role = _role_of(key)
+    for grp in groups:
+        members = sorted(grp, key=lambda k: -len(parts[k]["nverts"]))
+        role = _dominant_role(members)
         if role is None:
             skipped += 1
             continue
-        verts = [((x - minx) / sx, (y - miny) / sy) for x, y in part["verts"]]
-        meshes.append(Mesh(part_id=key, vertices=verts, uvs=[(0.0, 0.0)] * len(verts),
-                           triangles=part["tris"]))
-        layers.append(Layer(id=key, semantic_role=role, texture_path=Path(f"{key}.png"),
-                           draw_order=part["order"], width=0, height=0))
-        want[key] = _has_physics(key, stems)
+        rep = members[0]
+        nverts, tris = [], []
+        for k in grp:
+            base = len(nverts)
+            nverts.extend(parts[k]["nverts"])
+            tris.extend((a + base, b + base, c + base) for a, b, c in parts[k]["tris"])
+        meshes.append(Mesh(part_id=rep, vertices=nverts, uvs=[(0.0, 0.0)] * len(nverts), triangles=tris))
+        layers.append(Layer(id=rep, semantic_role=role, texture_path=Path(f"{rep}.png"),
+                           draw_order=min(parts[k]["order"] for k in grp), width=0, height=0))
+        want[rep] = any(_has_physics(k, stems) for k in grp)   # physics if ANY layer was rigged
     stack = LayerStack(layers=layers, canvas_width=1, canvas_height=1)
     labeled = [(dyn, want[dyn.part_id]) for dyn in analyze_meshes(stack, meshes)]
     return labeled, skipped
@@ -169,9 +199,13 @@ def main(argv=None) -> int:
     ap.add_argument("physics3", type=Path)
     ap.add_argument("--core", default=None)
     ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--align", action="store_true",
+                    help="collapse depth-layered parts into flat spatial regions before scoring")
+    ap.add_argument("--res", type=int, default=64, help="overlap-rasteriser resolution (with --align)")
     args = ap.parse_args(argv)
 
-    labeled, skipped = build_corpus(args.moc3, args.physics3, args.core)
+    labeled, skipped = build_corpus(args.moc3, args.physics3, args.core,
+                                    align=args.align, res=args.res)
     if not labeled:
         print("no roleable drawables found", file=sys.stderr)
         return 1

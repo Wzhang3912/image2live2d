@@ -60,6 +60,19 @@ _W_CANTILEVER = 0.30
 _W_SLENDER = 0.15
 _W_MATERIAL = 0.10
 
+# --- Density-aware free-edge trust ------------------------------------------------------------------
+# The free-edge cue assumes a SPARSE layout (a boundary that opens into empty space reads as free — the
+# case for our decomposer's non-overlapping parts). On a densely LAYERED representation (a hand-built
+# Live2D rig stacks shade / highlight / back meshes behind every part) that assumption breaks: almost
+# nothing opens into void, so free-edge collapses toward 0 for *every* part and stops discriminating
+# (measured on real pro models — see tools/calibrate_moc3.py). We therefore trust free-edge less as the
+# scene's overlap density rises, shifting that weight onto cantilever + slenderness, which don't depend
+# on cross-part void. Below _DENSITY_LO the weights are the base values exactly, so a sparse scene (our
+# whole current pipeline + tests) is byte-identical; the reweight only engages on dense inputs.
+_DENSITY_LO = 0.35     # overlap density at/below which free-edge is fully trusted (base weights)
+_DENSITY_HI = 0.70     # overlap density at/above which free-edge is maximally down-weighted
+_FREE_EDGE_SHIFT = 0.30  # weight moved off free-edge (onto cantilever+slenderness) at full density
+
 _SLENDER_REF = 4.0     # slenderness (aspect) at which the slender signal saturates to 1
 _STRAND_ASPECT = 2.5   # slenderness at/above which a dynamic part is a strand (else sheet/jiggle)
 _SHEET_CANT = 0.4      # cantilever at/above which a non-slender dynamic part is a hanging sheet
@@ -196,16 +209,43 @@ def score_dynamics(
                 if gj[i]:
                     tj[i] += 1
 
+    # Overlap density = fraction of occupied cells covered by more than one part. ~0 for our sparse,
+    # non-overlapping decomposition; high for a densely layered pro rig. Reweights free-edge (below).
+    occupied = multi = 0
+    for tj in total:
+        for t in tj:
+            if t:
+                occupied += 1
+                if t >= 2:
+                    multi += 1
+    density = multi / occupied if occupied else 0.0
+
     out: list[PartDynamics] = []
     for p in probes:
-        d = _score_one(p, grids[p.part_id], total, samples)
+        d = _score_one(p, grids[p.part_id], total, samples, density)
         if d is not None:
             out.append(d)
     return out
 
 
+def _score_weights(density: float) -> tuple[float, float, float, float]:
+    """(free-edge, cantilever, slenderness, material) weights for a scene of the given overlap
+    ``density``. At/below ``_DENSITY_LO`` these are the base weights exactly (so a sparse scene is
+    byte-identical); toward ``_DENSITY_HI`` weight moves off the now-unreliable free-edge cue onto
+    cantilever/slenderness, split in proportion to their base weights. Weights always sum to 1."""
+    span = _DENSITY_HI - _DENSITY_LO
+    s = _FREE_EDGE_SHIFT * _clamp((density - _DENSITY_LO) / span, 0.0, 1.0) if span > 0 else 0.0
+    cs = _W_CANTILEVER + _W_SLENDER
+    return (
+        _W_FREE_EDGE - s,
+        _W_CANTILEVER + s * (_W_CANTILEVER / cs),
+        _W_SLENDER + s * (_W_SLENDER / cs),
+        _W_MATERIAL,
+    )
+
+
 def _score_one(
-    probe: PartProbe, grid: list[list[bool]], total: list[list[int]], n: int
+    probe: PartProbe, grid: list[list[bool]], total: list[list[int]], n: int, density: float = 0.0,
 ) -> PartDynamics | None:
     free_edges = attached_edges = 0
     au = av = 0.0            # attachment centroid accumulators (of the part's own attached cells)
@@ -268,9 +308,16 @@ def _score_one(
     principal_angle = 0.5 * math.atan2(-2.0 * cov_uv, cov_uu - cov_vv)
 
     # Anchor = attachment centroid (model space, y up); fall back to the top-centre if unattached.
+    # In a DENSE scene the "attachment" is spurious — a part is backed on all sides by other layers, so
+    # its attachment centroid drifts to its own centre and cantilever collapses to ~0 (same failure as
+    # free-edge). So as density rises we slide the anchor toward the part's TOP edge (vmin), where a
+    # hanging appendage really attaches, restoring cantilever. At/below _DENSITY_LO this is a no-op.
+    trust = _clamp((density - _DENSITY_LO) / (_DENSITY_HI - _DENSITY_LO), 0.0, 1.0) \
+        if _DENSITY_HI > _DENSITY_LO else 0.0
     if an:
-        anchor = (au / an, 1.0 - av / an)
-        anchor_v = av / an
+        backed_v = av / an
+        anchor_v = backed_v * (1.0 - trust) + vmin * trust
+        anchor = (au / an, 1.0 - anchor_v)
     else:
         anchor = (cu, 1.0 - vmin)
         anchor_v = vmin
@@ -282,8 +329,9 @@ def _score_one(
 
     material = _material_prior(probe.role, probe.part_id)
     slender_norm = _clamp((slenderness - 1.0) / (_SLENDER_REF - 1.0), 0.0, 1.0)
-    score = (_W_FREE_EDGE * free_edge_ratio + _W_CANTILEVER * cantilever
-             + _W_SLENDER * slender_norm + _W_MATERIAL * material)
+    w_free, w_cant, w_slender, w_material = _score_weights(density)
+    score = (w_free * free_edge_ratio + w_cant * cantilever
+             + w_slender * slender_norm + w_material * material)
 
     eligible = probe.role in _SWAY_ELIGIBLE_ROLES
     verdict = _verdict(score, free_edge_ratio, eligible)

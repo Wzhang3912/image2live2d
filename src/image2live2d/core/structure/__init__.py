@@ -17,6 +17,7 @@ from .dynamics import (
     analyze_stack,
     score_dynamics,
 )
+from .appendages import AppendageSpec, accessory_appendages
 from .graph import (
     BODY,
     BODY_ROLES,
@@ -76,4 +77,6 @@ __all__ = [
     "skirt_cloth",
     "skirt_zones",
     "skirt_specs_from_params",
+    "AppendageSpec",
+    "accessory_appendages",
 ]

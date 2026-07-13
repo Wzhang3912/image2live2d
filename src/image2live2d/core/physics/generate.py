@@ -9,6 +9,8 @@ the result always satisfies the IRR's referential integrity.
 
 from __future__ import annotations
 
+from ..structure.appendages import accessory_appendages
+from ..structure.graph import build_rig_graph
 from ..structure.skirt import skirt_specs_from_params, skirt_zones
 from ..structure.strands import hair_specs_from_params, hair_strands
 from ..types import LayerStack
@@ -73,4 +75,16 @@ def generate_physics(
                 extra_drivers=drivers, model=PhysicsModel.spring_pendulum,
                 mass=z.mass, drag=z.drag, length=z.length,
             ))
+
+    # Accessory dangles: one pendulum per ornament, driven by the parent (head/body) the graph bound
+    # it to. Needs meshes to build the graph; the ids/drivers match author_rig's accessory sway params.
+    if meshes is not None:
+        graph = build_rig_graph(stack, meshes)
+        for a in accessory_appendages(stack, meshes, graph):
+            if a.param_id not in param_ids or a.driver not in param_ids:
+                continue
+            extras = [e for e in a.extra_drivers if e in param_ids]
+            rigs.append(PhysicsRig(id=f"phys_{a.param_id}", driver_param=a.driver,
+                                   output_param=a.param_id, extra_drivers=extras,
+                                   mass=a.mass, drag=a.drag, length=a.length))
     return rigs

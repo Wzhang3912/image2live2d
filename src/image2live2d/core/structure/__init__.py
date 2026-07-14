@@ -64,6 +64,9 @@ from .strands import (
     mesh_components,
     strand_param_id,
 )
+from .limbs import (
+    split_bundled_pairs,
+)
 from .zorder import (
     BROWS,
     FACE_FEATURES,
@@ -120,4 +123,5 @@ __all__ = [
     "FACE_FEATURES",
     "BROWS",
     "normalize_face_zorder",
+    "split_bundled_pairs",
 ]

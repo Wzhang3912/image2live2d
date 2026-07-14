@@ -9,6 +9,7 @@ import pytest
 from image2live2d.core.landmark import EyeLandmarks, Landmarks, MouthLandmarks
 from image2live2d.core.mesh import grid_mesh
 from image2live2d.core.rig import author_rig, select_template
+from image2live2d.core.rig.author import _BLINK
 from image2live2d.core.types import Layer, LayerStack
 from image2live2d.irr.schema import SemanticRole as R
 
@@ -111,9 +112,31 @@ def test_blink_uses_landmark_lid_axis():
 
     plain_dy = _kf(_param(plain, "ParamEyeLOpen"), 0.0).mesh_offsets["pupil_l"][vi][1]
     corr_dy = _kf(_param(corrected, "ParamEyeLOpen"), 0.0).mesh_offsets["pupil_l"][vi][1]
-    assert plain_dy == pytest.approx(0.64 - 0.62)   # own bbox midline
-    assert corr_dy == pytest.approx(0.65 - 0.62)    # shared lid axis
+    # The collapse travels _BLINK of the way to the axis, not all of it (see _BLINK: a full collapse
+    # makes the eye vanish rather than close). What this test pins is *which axis* it collapses toward.
+    assert plain_dy == pytest.approx(_BLINK * (0.64 - 0.62))   # own bbox midline
+    assert corr_dy == pytest.approx(_BLINK * (0.65 - 0.62))    # shared lid axis
     assert corr_dy != pytest.approx(plain_dy)
+
+
+def test_blink_leaves_the_lid_line_visible_instead_of_erasing_the_eye():
+    """A shut eye is drawn as a lid line — it must not collapse to zero area and disappear.
+
+    A full collapse lands every vertex on the lid axis, so the triangles go zero-area and the eye
+    vanishes into blank skin. Measured through the native Cubism core, Hiyori never degenerates an eye
+    mesh: its most-collapsed one still keeps 14.6% of its open height at ParamEyeLOpen=0.
+    """
+    parts = [("eye_l", R.eye_l, (0.30, 0.60, 0.50, 0.70)),
+             ("eye_white_l", R.eye_white_l, (0.33, 0.62, 0.47, 0.68)),
+             ("pupil_l", R.pupil_l, (0.38, 0.62, 0.42, 0.66))]
+    stack, meshes = _stack_and_meshes(parts)
+    params = author_rig(stack, meshes, select_template(stack)).parameters
+    closed = _kf(_param(params, "ParamEyeLOpen"), 0.0)
+
+    for m in meshes:
+        ys = [y + closed.mesh_offsets[m.part_id][i][1] for i, (_, y) in enumerate(m.vertices)]
+        open_h = max(y for _, y in m.vertices) - min(y for _, y in m.vertices)
+        assert max(ys) - min(ys) > 0.05 * open_h, f"{m.part_id} collapsed to nothing"
 
 
 # --------------------------------------------------------------------------------------------------

@@ -115,7 +115,13 @@ _UPPER_LIP_FRAC = 0.35  # upper-lip *rise* on open as a fraction of the lower-li
 #                         most of the opening, but a small upper-lip lift turns a jaw-slide into a
 #                         lens-shaped cavity. Both lips taper to the (anchored) mouth corners.
 _MOUTH_FORM = 0.35    # corner raise/lower as fraction of mouth height at +-1
-_BLINK = 1.0          # full collapse at 0
+_BLINK = 0.85         # collapse toward the lid line at 0 — *not* all the way. A full (1.0) collapse
+#                       lands every vertex on the lid axis, so the triangles go zero-area and the eye
+#                       does not merely close, it *vanishes* into blank skin: the lash line that a shut
+#                       eye is actually drawn with disappears with it. Real rigs never degenerate the
+#                       eye — measured through the native core, Hiyori's most-collapsed eye mesh still
+#                       keeps 14.6% of its open height at ParamEyeLOpen=0 (several keep 90-100%). The
+#                       residual here is what remains visible as the closed-eye lid line.
 
 # Absolute displacement caps (model units, canvas ~= 1.0) that bound runaway warps on pathological
 # silhouettes — far below QA's 0.6 runaway gate, far above normal motion (head-turn ~0.14, mouth

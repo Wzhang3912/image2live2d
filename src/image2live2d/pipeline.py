@@ -36,7 +36,10 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     landmarks = _safe_landmarks(stack)
     authoring = author_rig(stack, meshes, template, landmarks=landmarks)
     phys = _safe_physics(stack, authoring.parameters, meshes)
-    anims = motion.generate_idle(authoring.parameters) + motion.generate_expressions(authoring.parameters)
+    # Motion is not decoration — it is the only thing that ever moves the physics we just wired, and
+    # the only way a human can see the rig. Idle keeps it alive; the drive sheet exercises every axis
+    # of it; the sweep walks every parameter so nothing ships unlooked-at.
+    anims = motion.generate_all(authoring.parameters, phys)
     return assemble_rig(
         name=name,
         source=source,

@@ -404,8 +404,7 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         job.physics = ctx["physics"]
 
     def s_animation():
-        ctx["anims"] = (motion.generate_idle(ctx["auth"].parameters)
-                        + motion.generate_expressions(ctx["auth"].parameters))
+        ctx["anims"] = motion.generate_all(ctx["auth"].parameters, ctx["physics"])
 
     def s_emit():
         rig = assemble_rig(
@@ -576,7 +575,7 @@ def live2d_bundle_dir(job: "_Job") -> Path | None:
     rig = assemble_rig(
         name="model", source=None, stack=job.stack, meshes=job.meshes, deformers=[],
         parameters=job.params, physics=job.physics or [],
-        animations=motion.generate_idle(job.params) + motion.generate_expressions(job.params),
+        animations=motion.generate_all(job.params, job.physics or []),
     )
     out.mkdir(parents=True, exist_ok=True)
     (out / "textures").mkdir(exist_ok=True)

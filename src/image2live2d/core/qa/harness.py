@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
+from ..motion import MIN_SWING_FRAC
 from ...irr.schema import Parameter, Rig, Vec2
 from ...irr.validate import Issue, Severity, lint
 
@@ -128,11 +129,51 @@ def sweep_report(rig: Rig, *, steps: int = 9) -> SweepReport:
     return report
 
 
-def check(rig: Rig) -> list[Issue]:
-    """Full static QA pass: structural lint + numeric param sweep. Render-based artifact detection
-    (tearing/holes via the nijilive runtime) is added in Phase 2.
+def motion_issues(rig: Rig) -> list[Issue]:
+    """Does the rig's own motion actually exercise the rig?
+
+    A well-formed rig whose motion never moves it is exactly as good as no rig, and until now nothing
+    caught that: the shipped idle drove 6 of 31 parameters and left five of eight physics chains with a
+    flat-lined driver, so hair physics we had carefully tuned never swung once. These three checks are
+    the ones that would have caught it. Measured over the *natural* motion only — the diagnostic
+    ``sweep`` clip drives everything by construction and would paper over the very gap we're looking
+    for.
     """
-    return [*lint(rig), *sweep_report(rig).issues]
+    from ..motion import SWEEP_NAME, motion_coverage
+
+    # A rig with no clips at all is not a coverage failure — it is a different kind of model. A Live2D
+    # puppet for VTube Studio often ships with no motion3 at all, because face tracking drives
+    # ParamAngleX from a webcam. This check is about motion that *exists* and doesn't reach the rig.
+    if not rig.animations:
+        return []
+
+    natural = [a for a in rig.animations if a.name != SWEEP_NAME]
+    cov = motion_coverage(rig.parameters, rig.physics, natural)
+    issues = [
+        Issue(Severity.warning, "undriven_param",
+              f"no animation moves {pid!r} — it will never be seen unless a human drags the slider")
+        for pid in cov.undriven
+    ]
+    issues += [
+        Issue(Severity.warning, "unexcited_physics",
+              f"physics on {pid!r} can never swing: no driver moves more than "
+              f"{MIN_SWING_FRAC:.0%} of its range in any clip")
+        for pid in cov.unexcited
+    ]
+    issues += [
+        Issue(Severity.warning, "keyed_physics_output",
+              f"an animation keys {pid!r}, which the pendulum writes — the lane fights physics, "
+              f"and physics wins")
+        for pid in cov.keyed_outputs
+    ]
+    return issues
+
+
+def check(rig: Rig) -> list[Issue]:
+    """Full static QA pass: structural lint + numeric param sweep + motion coverage. Render-based
+    artifact detection (tearing/holes via the nijilive runtime) is added in Phase 2.
+    """
+    return [*lint(rig), *sweep_report(rig).issues, *motion_issues(rig)]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -149,16 +190,19 @@ class RigReport:
     lint_warnings: list[Issue]
     sweep: SweepReport
     landmark_warnings: list[str] = field(default_factory=list)
+    motion_warnings: list[Issue] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
-        return self.sweep.passed and not self.lint_warnings and not self.landmark_warnings
+        return (self.sweep.passed and not self.lint_warnings and not self.landmark_warnings
+                and not self.motion_warnings)
 
     @property
     def reasons(self) -> list[str]:
         out = [f"lint:{i.code}" for i in self.lint_warnings]
         out += [f"sweep:{i.code}" for i in self.sweep.issues if i.severity is Severity.warning]
         out += [f"landmark:{c}" for c in self.landmark_warnings]
+        out += [f"motion:{i.code}" for i in self.motion_warnings]
         return out
 
 
@@ -210,6 +254,7 @@ def evaluate(
         lint_warnings=warnings,
         sweep=sweep_report(rig, steps=steps),
         landmark_warnings=list(landmark_warnings or []),
+        motion_warnings=motion_issues(rig),
     )
 
 

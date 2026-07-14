@@ -64,6 +64,29 @@ def test_accessory_binds_to_nearest_group():
     assert g.parent_of("belt") == BODY
 
 
+def test_body_sized_accessory_rides_the_body_not_the_head():
+    """A limb mass the decomposer mislabelled ``accessory`` must not ride the head.
+
+    Real geometry (char_fixed_v10): the decomposer bundled *both arms* into one ``accessory`` layer.
+    Its top-centre anchor lands inside the hair_back bbox *and* the torso bbox, so nearest-anchor
+    scored a 0-0 tie and the tie-break handed the arms to the head — head rotation then dragged the
+    arms through the head's affine (the "cardboard splay"). Overlap is the honest signal: the bundle
+    covers body parts by ~34% of its area and head parts by ~1.5%.
+    """
+    g = _graph([
+        ("hair_back", R.hair_back, (0.40, 0.77, 0.58, 0.96)),
+        ("face", R.face_base, (0.44, 0.81, 0.54, 0.93)),
+        ("neck", R.neck, (0.47, 0.79, 0.51, 0.85)),
+        ("torso", R.clothing, (0.43, 0.64, 0.55, 0.81)),
+        ("skirt", R.clothing, (0.36, 0.45, 0.62, 0.65)),
+        ("legs", R.clothing, (0.41, 0.13, 0.58, 0.54)),
+        ("arms", R.accessory, (0.28, 0.49, 0.70, 0.78)),   # both arms, mislabelled
+        ("hairclip", R.accessory, (0.53, 0.88, 0.55, 0.90)),
+    ])
+    assert g.parent_of("arms") == BODY        # regression: was HEAD (0-0 anchor tie)
+    assert g.parent_of("hairclip") == HEAD    # a genuine head accessory still binds to the head
+
+
 def test_accessory_falls_to_the_only_group_present():
     head_only = _graph([
         ("face", R.face_base, (0.3, 0.6, 0.7, 0.95)),

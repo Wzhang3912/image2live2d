@@ -94,3 +94,21 @@ def test_features_under_the_skin_all_surface():
     normalize_face_zorder(stack, meshes)
     o = _order(stack)
     assert o["mouth"] > o["face"] and o["eye"] > o["face"]
+
+
+def test_a_buried_mouth_takes_its_cavity_up_with_it():
+    """The synthesised inner mouth must surface alongside the lips it hides behind.
+
+    core.synth paints the cavity just *under* the lip line. If the decomposer also buried the mouth
+    under the skin, lifting only the lips would strand the cavity below face_base — an interior painted
+    under opaque skin, i.e. the very bug this module exists to prevent.
+    """
+    stack, meshes = _scene([
+        ("cavity", R.mouth_cavity, 1, (0.46, 0.62, 0.54, 0.67)),
+        ("mouth", R.mouth, 2, (0.47, 0.64, 0.53, 0.67)),
+        ("face", R.face_base, 10, (0.40, 0.60, 0.60, 0.90)),
+    ])
+    normalize_face_zorder(stack, meshes)
+    o = _order(stack)
+    assert o["cavity"] > o["face"]        # the interior is not painted under the skin
+    assert o["mouth"] > o["cavity"]       # ...but the lips still read on top of it

@@ -29,8 +29,8 @@ HEAD_ROLES: frozenset[SemanticRole] = frozenset({
     SemanticRole.face_base, SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back,
     SemanticRole.eyebrow_l, SemanticRole.eyebrow_r, SemanticRole.eye_l, SemanticRole.eye_r,
     SemanticRole.eye_white_l, SemanticRole.eye_white_r, SemanticRole.pupil_l, SemanticRole.pupil_r,
-    SemanticRole.nose, SemanticRole.mouth, SemanticRole.ear_l, SemanticRole.ear_r,
-    SemanticRole.blush,
+    SemanticRole.nose, SemanticRole.mouth, SemanticRole.mouth_cavity,
+    SemanticRole.ear_l, SemanticRole.ear_r, SemanticRole.blush,
 })
 
 BODY_ROLES: frozenset[SemanticRole] = frozenset({

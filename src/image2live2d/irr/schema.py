@@ -46,6 +46,7 @@ class SemanticRole(str, Enum):
     pupil_r = "pupil_r"
     nose = "nose"
     mouth = "mouth"
+    mouth_cavity = "mouth_cavity"  # synthesised interior behind the lips — see core.synth.mouth
     ear_l = "ear_l"
     ear_r = "ear_r"
     blush = "blush"

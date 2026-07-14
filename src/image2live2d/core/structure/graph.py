@@ -151,7 +151,7 @@ def build_rig_graph(
         elif role in BODY_ROLES:
             parent = BODY
         elif role is SemanticRole.accessory:
-            parent = _accessory_parent(anchor, head_ref, body_ref)
+            parent = _accessory_parent(box, anchor, head_ref, body_ref)
         else:
             parent = None                            # background / other
         nodes.append(RigNode(part_id=layer.id, role=role, parent=parent, anchor=anchor, bbox=box))
@@ -190,13 +190,33 @@ def _sleeve_arm(
     return best_side
 
 
-def _accessory_parent(anchor: Vec2, head_ref: list[Mesh], body_ref: list[Mesh]) -> str:
-    """Bind an accessory to the nearest of the head/body groups by its attachment point (top-centre),
-    falling to whichever group exists when the other is absent. Matches the prior _classify_accessories."""
+def _accessory_parent(
+    box: tuple[float, float, float, float],
+    anchor: Vec2,
+    head_ref: list[Mesh],
+    body_ref: list[Mesh],
+) -> str:
+    """Bind an accessory to the head or body group — by *footprint overlap* first, anchor distance only
+    as a fallback.
+
+    Overlap leads because the anchor (top-centre) is a single point and lies about extent: a decomposer
+    that bundles both arms into one "accessory" layer yields a torso-spanning part whose top-centre sits
+    at the shoulders — inside the hair *and* the torso bbox at once. That scored a 0-0 distance tie, and
+    the tie-break handed the arms to the head, so head rotation dragged them along (cardboard splay).
+    How much of the part actually *lies over* each group settles it honestly: the arm bundle covers the
+    body far more than the head, while a hair clip is wholly within the head.
+
+    Anchor distance still decides the genuinely ambiguous case — a part that overlaps neither group (a
+    detached ribbon, a floating charm) — preserving the original behaviour where overlap says nothing.
+    """
     if not head_ref:
         return BODY
     if not body_ref:
         return HEAD
+    head_ov = max((_bbox_overlap_frac(box, h.vertices) for h in head_ref), default=0.0)
+    body_ov = max((_bbox_overlap_frac(box, b.vertices) for b in body_ref), default=0.0)
+    if max(head_ov, body_ov) > 0.0:
+        return HEAD if head_ov >= body_ov else BODY
     dh = min(_point_bbox_dist(anchor, _bbox(h.vertices)) for h in head_ref)
     db = min(_point_bbox_dist(anchor, _bbox(b.vertices)) for b in body_ref)
     return HEAD if dh <= db else BODY

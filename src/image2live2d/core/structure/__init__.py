@@ -66,6 +66,7 @@ from .strands import (
 )
 from .limbs import (
     split_bundled_pairs,
+    split_fused_legs,
 )
 from .zorder import (
     BROWS,
@@ -124,4 +125,5 @@ __all__ = [
     "BROWS",
     "normalize_face_zorder",
     "split_bundled_pairs",
+    "split_fused_legs",
 ]

@@ -96,3 +96,77 @@ def test_synthesis_is_idempotent(tmp_path):
 def _height(m, offsets) -> float:
     ys = [y + offsets[i][1] for i, (_, y) in enumerate(m.vertices)]
     return max(ys) - min(ys)
+
+
+def _interior_tones(layer):
+    """The distinct tones down the centre of the painted cavity, brightest first."""
+    import numpy as np
+    from PIL import Image
+
+    img = Image.open(layer.texture_path).convert("RGBA")
+    a = np.asarray(img.crop(img.getbbox()))
+    col = a[:, a.shape[1] // 2]                       # straight down the middle of the mouth
+    return [tuple(int(v) for v in px[:3]) for px in col if px[3] > 200]
+
+
+def test_the_interior_has_teeth_and_a_tongue_not_just_a_hole(tmp_path):
+    """A flat lens reads as a hole punched in the face. An open anime mouth is three things: a dark
+    hollow, a band of upper teeth under the lip, and a tongue on the floor."""
+    stack = decompose.from_layer_dir(_layers(tmp_path))
+    layer = synthesize_mouth_cavity(stack)
+    tones = _interior_tones(layer)
+    assert len(tones) > 5
+
+    lum = [sum(t) / 3 for t in tones]
+    teeth, hollow = max(lum), min(lum)
+    assert teeth > 200                                # enamel: near-white
+    assert hollow < 110                               # the mouth is mostly shadow
+    # the teeth hang from the roof and the tongue sits on the floor, so brightness is not monotonic:
+    # bright (teeth) -> dark (hollow) -> mid (tongue)
+    top_third = lum[: len(lum) // 3]
+    middle = lum[len(lum) // 3: 2 * len(lum) // 3]
+    bottom = lum[2 * len(lum) // 3:]
+    assert max(top_third) > max(middle)               # teeth are above the hollow
+    assert max(bottom) > min(middle)                  # the tongue is lighter than the hollow it sits in
+
+
+def test_the_interior_is_struck_from_the_character_s_own_lip_hue(tmp_path):
+    """Nothing is hard-coded red: recolour the lips and the whole interior follows, so a cavity can
+    never clash with the character's palette."""
+    import colorsys
+
+    from PIL import Image, ImageDraw
+
+    d = tmp_path / "layers"
+    d.mkdir()
+    face = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(face).rectangle([30, 20, 98, 110], fill=(250, 220, 205, 255))
+    face.save(d / "00_face_base.png")
+    lips = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(lips).rectangle([56, 84, 76, 87], fill=(70, 90, 160, 255))   # blue lips
+    lips.save(d / "20_mouth.png")
+
+    layer = synthesize_mouth_cavity(decompose.from_layer_dir(d))
+    hues = [colorsys.rgb_to_hsv(*(c / 255 for c in t))[0] for t in _interior_tones(layer)]
+    lip_hue = colorsys.rgb_to_hsv(70 / 255, 90 / 255, 160 / 255)[0]
+    assert all(abs(h - lip_hue) < 0.06 for h in hues)  # the whole interior tracks the lips
+
+
+def test_a_mouth_already_drawn_open_is_left_alone(tmp_path):
+    """If the artist drew the mouth open, the art already carries its own teeth and tongue, in the
+    character's real style. Painting an interior behind that would be inventing over existing art."""
+    from PIL import Image, ImageDraw
+
+    d = tmp_path / "layers"
+    d.mkdir()
+    face = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(face).rectangle([30, 20, 98, 110], fill=(250, 220, 205, 255))
+    face.save(d / "00_face_base.png")
+    # a mouth that is a *shape*, not a stroke — 20 wide x 16 tall
+    open_mouth = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(open_mouth).ellipse([56, 80, 76, 96], fill=(120, 50, 55, 255))
+    open_mouth.save(d / "20_mouth.png")
+
+    stack = decompose.from_layer_dir(d)
+    assert synthesize_mouth_cavity(stack) is None
+    assert not stack.by_role(R.mouth_cavity)

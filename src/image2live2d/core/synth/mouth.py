@@ -39,29 +39,89 @@ _CAVITY_W_INSET = 0.10
 # The lips part about their own line, so the cavity has to straddle it: mostly below (the jaw drops),
 # but far enough above to back the upper lip's smaller rise.
 _CAVITY_RISE_FRAC = 0.25
-# The interior is darker and less saturated than the lips themselves.
-_CAVITY_VALUE = 0.42
-_CAVITY_SAT = 0.55
+
+# The three tones of an open anime mouth, all struck from the lip line's own hue so the interior can
+# never fall outside the character's palette: a dark hollow, a bright band of upper teeth just under the
+# lip, and a warmer tongue filling the floor. (saturation, value) per tone.
+_TONE_CAVITY = (0.66, 0.28)   # the hollow: much darker than the lips — most of an open mouth is shadow,
+#                               and the teeth only read as teeth against something dark
+_TONE_TEETH = (0.05, 0.98)    # near-white, only faintly tinted — enamel, not paint
+_TONE_TONGUE = (0.42, 0.72)   # lighter and pinker than the hollow it sits in
+
+_TEETH_H_FRAC = 0.26          # upper teeth as a fraction of cavity height, hanging from its roof
+_TONGUE_W_FRAC = 0.58         # the tongue is a bump on the floor of the mouth, not its contents:
+_TONGUE_H_FRAC = 0.42         # narrower than the mouth and confined to the lower part of it
+
+# The mouth is a couple of dozen pixels across on a 1280 canvas, so teeth land on 2-3 of them. Paint the
+# cavity magnified and shrink it back down, or the detail is a stair-stepped smear rather than a mouth.
+_SUPERSAMPLE = 4
+
+# Only a *closed* mouth needs an interior painted for it. A mouth the artist already drew open carries
+# its own — real teeth, a real tongue, in the character's actual style — and painting behind that would
+# be inventing over art that already exists. A closed mouth is a stroke: on a real character, 21x6 px.
+# An open one is a shape. The aspect ratio tells them apart, and nothing else has to.
+_CLOSED_MAX_ASPECT = 0.40     # height/width above this, the mouth is already open — leave it alone
 
 
-def _lip_colour(img) -> tuple[int, int, int]:
-    """A plausible interior hue, taken from the lip line's own darkest pixels so the cavity always sits
-    inside the character's palette rather than a hard-coded red."""
+def _palette(img) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
+    """``(cavity, teeth, tongue)`` — all three struck from the lip line's own darkest pixels, so the
+    interior sits inside the character's palette rather than a hard-coded red."""
     import numpy as np
 
     a = np.asarray(img)
     rgb, alpha = a[:, :, :3].astype(float), a[:, :, 3]
     solid = alpha > 128
-    if not solid.any():
-        return (90, 40, 45)
-    px = rgb[solid]
-    # the darkest quartile: the lip *line*, not the soft antialiased skin-side edge
-    lum = px.mean(axis=1)
-    dark = px[lum <= np.percentile(lum, 25)]
-    r, g, b = (dark.mean(axis=0) / 255.0)
-    h, _, _ = colorsys.rgb_to_hsv(r, g, b)
-    r, g, b = colorsys.hsv_to_rgb(h, _CAVITY_SAT, _CAVITY_VALUE)
-    return (int(r * 255), int(g * 255), int(b * 255))
+    hue = 0.98                                        # a neutral mouth-red if the lips gave us nothing
+    if solid.any():
+        px = rgb[solid]
+        # the darkest quartile: the lip *line*, not the soft antialiased skin-side edge
+        lum = px.mean(axis=1)
+        dark = px[lum <= np.percentile(lum, 25)]
+        r, g, b = dark.mean(axis=0) / 255.0
+        hue, _, _ = colorsys.rgb_to_hsv(r, g, b)
+
+    def tone(sv: tuple[float, float]) -> tuple[int, int, int]:
+        r, g, b = colorsys.hsv_to_rgb(hue, sv[0], sv[1])
+        return (int(r * 255), int(g * 255), int(b * 255))
+
+    return tone(_TONE_CAVITY), tone(_TONE_TEETH), tone(_TONE_TONGUE)
+
+
+def _paint_interior(size, box, palette) -> "object":
+    """The inside of a mouth: a dark hollow, upper teeth under the lip, a tongue on the floor.
+
+    Teeth and tongue are drawn as plain shapes and then **clipped by the cavity's own outline**, so the
+    ellipse does the work of curving them — the teeth come out as a crescent following the roof of the
+    mouth, and the tongue as a dome sitting in its floor, without either being modelled as a curve.
+    """
+    from PIL import Image, ImageDraw
+
+    cavity, teeth, tongue = palette
+    s = _SUPERSAMPLE
+    cx0, cy0, cx1, cy1 = (v * s for v in box)
+    w, h = cx1 - cx0, cy1 - cy0
+
+    big = Image.new("RGBA", (size[0] * s, size[1] * s), (0, 0, 0, 0))
+    ink = ImageDraw.Draw(big)
+
+    # the hollow, and the outline that clips everything inside it
+    ink.ellipse([cx0, cy0, cx1, cy1], fill=(*cavity, 255))
+    mask = Image.new("L", big.size, 0)
+    ImageDraw.Draw(mask).ellipse([cx0, cy0, cx1, cy1], fill=255)
+
+    inner = Image.new("RGBA", big.size, (0, 0, 0, 0))
+    pen = ImageDraw.Draw(inner)
+    # upper teeth: a straight band across the roof — the ellipse clips it into a crescent
+    pen.rectangle([cx0, cy0, cx1, cy0 + h * _TEETH_H_FRAC], fill=(*teeth, 255))
+    # the tongue: a dome on the floor, running off the bottom edge so the clip rounds it off
+    tw, th = w * _TONGUE_W_FRAC, h * _TONGUE_H_FRAC
+    tx = cx0 + (w - tw) / 2.0
+    pen.ellipse([tx, cy1 - th, tx + tw, cy1 + th], fill=(*tongue, 255))
+
+    big.paste(inner, (0, 0), Image.composite(inner.split()[3], Image.new("L", big.size, 0), mask))
+    # BOX, not LANCZOS: a supersampled shrink wants a plain area-average. LANCZOS rings, and its
+    # negative lobes smear a halo of stray alpha *outside* the cavity — past the lips it hides behind.
+    return big.resize(size, Image.BOX)
 
 
 def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
@@ -72,7 +132,7 @@ def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     layer). Mutates ``stack``.
     """
     try:
-        from PIL import Image, ImageDraw
+        from PIL import Image
     except ImportError:                                   # pragma: no cover - Pillow gated
         return None
 
@@ -92,6 +152,8 @@ def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     lip_w, lip_h = x1 - x0, y1 - y0
     if lip_w < 2 or lip_h < 1:
         return None
+    if lip_h > _CLOSED_MAX_ASPECT * lip_w:
+        return None    # this mouth is already drawn open — the artist's own interior is in there
 
     cav_h = lip_w * _CAVITY_H_FRAC                  # from the WIDTH — the mouth's only honest dimension
     inset = lip_w * _CAVITY_W_INSET
@@ -102,8 +164,7 @@ def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     cy0 = lip_mid - cav_h * _CAVITY_RISE_FRAC
     cy1 = cy0 + cav_h
 
-    cavity = Image.new("RGBA", img.size, (0, 0, 0, 0))
-    ImageDraw.Draw(cavity).ellipse([cx0, cy0, cx1, cy1], fill=(*_lip_colour(img), 255))
+    cavity = _paint_interior(img.size, (cx0, cy0, cx1, cy1), _palette(img))
 
     out = src.with_name(f"{lips.draw_order}_{SemanticRole.mouth_cavity.value}.png")
     cavity.save(out)

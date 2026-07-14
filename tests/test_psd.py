@@ -75,7 +75,7 @@ def test_raws_to_stack_builds_pipeline_ready_stack(tmp_path):
     # the extracted stack drives the rest of the spine unchanged
     rig = rig_from_stack(stack, name="frompsd")
     assert {"ParamMouthOpenY", "ParamEyeLOpen", "ParamEyeROpen"} <= rig.parameter_ids()
-    assert len(rig.parts) == 5          # 4 decomposed + the synthesised mouth cavity
+    assert len(rig.parts) == 4          # no cavity: this stub mouth is a shape, not a lip line
 
 
 @pytest.mark.skipif(not (_HAS_PIL and _HAS_PSD), reason="needs Pillow + psd-tools")
@@ -108,4 +108,4 @@ def test_from_psd_end_to_end(tmp_path):
     assert {R.eye_l, R.eye_r, R.mouth} <= {lyr.semantic_role for lyr in stack.layers}
     rig = rig_from_stack(stack, name="char")
     assert "ParamMouthOpenY" in rig.parameter_ids()
-    assert len(rig.parts) == 5          # 4 decomposed + the synthesised mouth cavity
+    assert len(rig.parts) == 4          # no cavity: this stub mouth is a shape, not a lip line

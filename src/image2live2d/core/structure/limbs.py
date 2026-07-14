@@ -68,6 +68,16 @@ _TWINS: dict[SemanticRole, tuple[SemanticRole, SemanticRole]] = {
 _ARM_MIN_HEIGHT_FRAC = 0.12  # each arm spans at least this fraction of the character's height
 _ARM_MIN_LEVEL_FRAC = 0.35   # ...and hangs no lower than this fraction of the way down from the head
 
+# --- fused legs ------------------------------------------------------------------------------------
+# Legs cannot be recovered as connected components: the thighs meet, so both legs are one blob joined at
+# the hips. But they are only fused at the *top* — below the crotch a real gap opens between them, and
+# grid_mesh drops those empty cells, so the gap is already a hole in the lattice. Find the hole, and the
+# seam to cut along is the line it traces.
+_SEAM_GAP_MIN = 1.6          # a row has a hole when its widest interior gap exceeds this many grid steps
+_SEAM_MIN_ROWS_FRAC = 0.30   # the hole must run up at least this fraction of the part's rows from the hem
+_LEG_MIN_HEIGHT_FRAC = 0.25  # legs are a big part of a body; a trim or a slit in a skirt is not
+_LEG_SEAM_CENTRED = 0.10     # the seam must sit within this fraction of the body's width of its midline
+
 
 def _bbox(verts: list[Vec2]) -> tuple[float, float, float, float]:
     xs = [x for x, _ in verts]
@@ -136,6 +146,118 @@ def _looks_like_arms(
         if y1 < floor_y:
             return False                              # hangs too low — that's a leg or a shoe
     return True
+
+
+def _leg_seam(mesh: Mesh, *, body_box) -> float | None:
+    """The x of the seam between two fused legs — or ``None`` if this part is not a pair of legs.
+
+    Walks the mesh's lattice rows from the hem upward looking for the gap between the legs. ``grid_mesh``
+    drops transparent cells, so the space between two legs is literally a hole in the lattice: a row that
+    straddles it has one interior gap far wider than its own grid step. Those rows must run *up from the
+    hem* (legs open downward; a skirt is solid) and the gap must sit on the body's midline.
+    """
+    rows: dict[float, list[float]] = {}
+    for x, y in mesh.vertices:
+        rows.setdefault(round(y, 5), []).append(x)
+    if len(rows) < 4:
+        return None
+
+    step = min((sorted(xs)[i + 1] - sorted(xs)[i]
+                for xs in rows.values() if len(xs) > 1
+                for i in range(len(sorted(xs)) - 1)), default=0.0)
+    if step <= 0.0:
+        return None
+
+    ordered = sorted(rows)                              # bottom (hem) -> top
+    centres: list[float] = []
+    for y in ordered:
+        xs = sorted(rows[y])
+        gap, centre = max(((xs[i + 1] - xs[i], (xs[i] + xs[i + 1]) / 2.0)
+                           for i in range(len(xs) - 1)), default=(0.0, 0.0))
+        if gap < _SEAM_GAP_MIN * step:
+            break                                       # the legs have fused: this is the crotch
+        centres.append(centre)
+    if len(centres) < _SEAM_MIN_ROWS_FRAC * len(ordered):
+        return None                                     # no hole, or only a nick at the hem
+
+    seam = sorted(centres)[len(centres) // 2]           # median: robust to a ragged hem
+    bx0, by0, bx1, by1 = body_box
+    if abs(seam - (bx0 + bx1) / 2.0) > _LEG_SEAM_CENTRED * (bx1 - bx0):
+        return None                                     # off-centre: a slit or a fold, not a crotch
+    ys = [y for _, y in mesh.vertices]
+    if (max(ys) - min(ys)) < _LEG_MIN_HEIGHT_FRAC * (by1 - by0):
+        return None                                     # too small to be a pair of legs
+    return seam
+
+
+def _cut_at_seam(mesh: Mesh, seam_x: float, ids: tuple[str, str]) -> tuple[Mesh, Mesh] | None:
+    """Cut a mesh into ``(left, right)`` along a vertical seam.
+
+    Assigns whole *triangles* by their centroid rather than splitting vertices across the line, so no
+    triangle is dropped and no hole opens along the cut: every triangle is drawn exactly once, by one
+    side or the other. Vertices on the seam are simply carried by both halves.
+    """
+    out = []
+    for side, keep_left in zip(ids, (True, False)):
+        tris = [t for t in mesh.triangles
+                if (sum(mesh.vertices[i][0] for i in t) / 3.0 < seam_x) is keep_left]
+        used = sorted({i for t in tris for i in t})
+        sub = _sub_mesh(mesh, side, used)
+        if sub is None:
+            return None
+        out.append(sub)
+    return out[0], out[1]
+
+
+def split_fused_legs(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
+    """Cut a part that is *both* legs fused at the hips into a left and a right leg.
+
+    :func:`split_bundled_pairs` cannot do this: connected components only separate parts that are
+    already disjoint, and the thighs touch, so both legs come back as one blob. The gap between the legs
+    below the crotch is the handle — see :func:`_leg_seam`. Mutates ``stack`` and ``meshes``; returns the
+    ids created.
+    """
+    mesh_by_part = {m.part_id: m for m in meshes}
+    all_verts = [v for m in meshes for v in m.vertices]
+    if not all_verts:
+        return []
+    body_box = _bbox(all_verts)
+
+    created: list[str] = []
+    for layer in list(stack.layers):
+        mesh = mesh_by_part.get(layer.id)
+        if mesh is None:
+            continue
+        role = layer.semantic_role
+        if role not in _UNSORTED and role is not SemanticRole.leg_l:
+            continue
+        if SemanticRole.leg_r in {ly.semantic_role for ly in stack.layers}:
+            continue                                    # a real right leg exists; leave this alone
+        if len(mesh_components(mesh)) != 1:
+            continue                                    # already separable: split_bundled_pairs owns it
+        seam = _leg_seam(mesh, body_box=body_box)
+        if seam is None:
+            continue
+
+        ids = (f"{layer.draw_order:02d}_{SemanticRole.leg_l.value}",
+               f"{layer.draw_order:02d}_{SemanticRole.leg_r.value}")
+        cut = _cut_at_seam(mesh, seam, ids)
+        if cut is None:
+            continue
+        halves = [
+            (Layer(id=ids[k], semantic_role=r, texture_path=layer.texture_path,
+                   draw_order=layer.draw_order, width=layer.width, height=layer.height,
+                   bbox=layer.bbox), cut[k])
+            for k, r in enumerate((SemanticRole.leg_l, SemanticRole.leg_r))
+        ]
+        i = stack.layers.index(layer)
+        stack.layers[i:i + 1] = [ly for ly, _ in halves]
+        j = meshes.index(mesh)
+        meshes[j:j + 1] = [m for _, m in halves]
+        for ly, m in halves:
+            mesh_by_part[ly.id] = m
+            created.append(ly.id)
+    return created
 
 
 def split_bundled_pairs(stack: LayerStack, meshes: list[Mesh]) -> list[str]:

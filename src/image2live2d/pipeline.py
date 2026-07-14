@@ -15,7 +15,7 @@ from .core import decompose, ingest, landmark, mesh, motion, physics, preprocess
 from .core.assemble import assemble_rig
 from .core.landmark import Landmarks
 from .core.rig import author_rig, select_template
-from .core.structure import normalize_face_zorder, split_bundled_pairs
+from .core.structure import normalize_face_zorder, split_bundled_pairs, split_fused_legs
 from .core.types import LayerStack
 from .irr.schema import Rig
 
@@ -29,6 +29,7 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
     meshes = mesh.build_meshes(stack)
     split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
+    split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
     _lift_occluded_accessories(stack, meshes)
     normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
     template = select_template(stack)

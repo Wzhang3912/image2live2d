@@ -165,3 +165,86 @@ def test_two_lobes_on_the_same_side_are_not_a_pair():
     ])
     split_bundled_pairs(stack, meshes)
     assert all(r is not R.arm_l for r in _roles(stack).values())
+
+
+# --- fused legs: connected components can't help, so cut along the crotch seam ---------------------
+def _legs_mesh(pid="legs", *, crotch_v=0.35, gap=(0.44, 0.56), rect=(0.40, 0.10, 0.60, 0.55)):
+    """Two legs fused at the hips: solid above the crotch, with a gap between them below it.
+
+    ``grid_mesh`` drops the transparent cells, so the gap becomes a real hole in the lattice — which is
+    exactly the handle the seam finder uses. ``v`` runs top->bottom.
+    """
+    from image2live2d.core.mesh import grid_mesh
+
+    def alpha(u, v):
+        return 0 if v > crotch_v and gap[0] < u < gap[1] else 255
+
+    return grid_mesh(pid, rect, alpha, grid=16)
+
+
+def _legs_scene(mesh, role=R.clothing):
+    layers = [
+        Layer(id="face", semantic_role=R.face_base, texture_path=Path("f.png"),
+              draw_order=0, width=64, height=64),
+        Layer(id=mesh.part_id, semantic_role=role, texture_path=Path("l.png"),
+              draw_order=1, width=64, height=64),
+    ]
+    meshes = [_lobes("face", [(0.45, 0.80, 0.55, 0.95)]), mesh]
+    return LayerStack(layers=layers, canvas_width=64, canvas_height=64), meshes
+
+
+def test_legs_fused_at_the_hips_are_cut_into_a_left_and_a_right():
+    """Connected components cannot separate the legs — the thighs touch, so both legs are one blob.
+    The gap that opens below the crotch is the handle."""
+    from image2live2d.core.structure import split_bundled_pairs, split_fused_legs
+
+    mesh = _legs_mesh()
+    assert len(split_bundled_pairs(*_legs_scene(mesh))) == 0     # components genuinely can't do it
+
+    stack, meshes = _legs_scene(_legs_mesh())
+    created = split_fused_legs(stack, meshes)
+    assert set(created) == {"01_leg_l", "01_leg_r"}
+    roles = _roles(stack)
+    assert roles["01_leg_l"] is R.leg_l and roles["01_leg_r"] is R.leg_r
+
+
+def test_the_cut_loses_no_triangles():
+    """Every triangle goes wholly to one side, so no hole can open along the seam."""
+    from image2live2d.core.structure import split_fused_legs
+
+    original = _legs_mesh()
+    stack, meshes = _legs_scene(_legs_mesh())
+    split_fused_legs(stack, meshes)
+    by = {m.part_id: m for m in meshes}
+    assert len(by["01_leg_l"].triangles) + len(by["01_leg_r"].triangles) == len(original.triangles)
+    # ...and the halves land on opposite sides of the seam
+    assert max(x for x, _ in by["01_leg_l"].vertices) <= min(x for x, _ in by["01_leg_r"].vertices)
+
+
+def test_a_solid_skirt_is_not_cut():
+    """A skirt has no crotch. Cutting one in half would give each side its own hip and knee."""
+    from image2live2d.core.mesh import grid_mesh
+    from image2live2d.core.structure import split_fused_legs
+
+    skirt = grid_mesh("skirt", (0.36, 0.30, 0.64, 0.55), lambda u, v: 255, grid=16)
+    stack, meshes = _legs_scene(skirt)
+    assert split_fused_legs(stack, meshes) == []
+
+
+def test_an_off_centre_slit_is_not_a_crotch():
+    """A gap away from the body's midline is a slit or a fold in a garment, not the space between legs."""
+    from image2live2d.core.structure import split_fused_legs
+
+    stack, meshes = _legs_scene(_legs_mesh(gap=(0.70, 0.80)))
+    assert split_fused_legs(stack, meshes) == []
+
+
+def test_a_real_right_leg_stops_the_cut():
+    """If leg_r already exists the part is not both legs — never invent a second one."""
+    from image2live2d.core.structure import split_fused_legs
+
+    stack, meshes = _legs_scene(_legs_mesh())
+    stack.layers.append(Layer(id="realleg", semantic_role=R.leg_r, texture_path=Path("r.png"),
+                              draw_order=2, width=64, height=64))
+    meshes.append(_lobes("realleg", [(0.60, 0.10, 0.66, 0.50)]))
+    assert split_fused_legs(stack, meshes) == []

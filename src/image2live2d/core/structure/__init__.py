@@ -64,6 +64,11 @@ from .strands import (
     mesh_components,
     strand_param_id,
 )
+from .zorder import (
+    BROWS,
+    FACE_FEATURES,
+    normalize_face_zorder,
+)
 
 __all__ = [
     "AlphaSampler",
@@ -112,4 +117,7 @@ __all__ = [
     "best_thresholds",
     "pool_metrics",
     "roc_auc",
+    "FACE_FEATURES",
+    "BROWS",
+    "normalize_face_zorder",
 ]

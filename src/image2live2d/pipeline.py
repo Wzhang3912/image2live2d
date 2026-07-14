@@ -15,6 +15,7 @@ from .core import decompose, ingest, landmark, mesh, motion, physics, preprocess
 from .core.assemble import assemble_rig
 from .core.landmark import Landmarks
 from .core.rig import author_rig, select_template
+from .core.structure import normalize_face_zorder
 from .core.types import LayerStack
 from .irr.schema import Rig
 
@@ -28,6 +29,7 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
     meshes = mesh.build_meshes(stack)
     _lift_occluded_accessories(stack, meshes)
+    normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
     template = select_template(stack)
     landmarks = _safe_landmarks(stack)
     authoring = author_rig(stack, meshes, template, landmarks=landmarks)

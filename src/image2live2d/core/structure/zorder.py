@@ -31,7 +31,7 @@ FACE_FEATURES: frozenset[SemanticRole] = frozenset({
     SemanticRole.eye_l, SemanticRole.eye_r,
     SemanticRole.eye_white_l, SemanticRole.eye_white_r,
     SemanticRole.pupil_l, SemanticRole.pupil_r,
-    SemanticRole.nose, SemanticRole.mouth, SemanticRole.blush,
+    SemanticRole.nose, SemanticRole.mouth, SemanticRole.mouth_cavity, SemanticRole.blush,
 })
 
 BROWS: frozenset[SemanticRole] = frozenset({SemanticRole.eyebrow_l, SemanticRole.eyebrow_r})
@@ -72,31 +72,35 @@ def normalize_face_zorder(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
 
     moved: list[str] = []
 
-    def lift_above(layer, tops: list) -> bool:
-        """Raise ``layer`` just above the highest of ``tops`` that covers it and outranks it."""
-        box = box_by_part.get(layer.id)
-        if box is None:
-            return False
-        blocking = [t for t in tops
-                    if t.draw_order > layer.draw_order
-                    and _covered_frac(box, box_by_part[t.id]) >= _COVER_MIN]
-        if not blocking:
-            return False
-        layer.draw_order = max(t.draw_order for t in blocking) + 1
-        return True
+    def lift_group(roles: frozenset[SemanticRole], tops: list) -> None:
+        """Raise every part in ``roles`` that ``tops`` both outranks and actually covers.
 
-    # 1. No face feature hides under the skin.
-    face_base = occluders(SemanticRole.face_base)
-    for layer in stack.layers:
-        if layer.semantic_role in FACE_FEATURES and lift_above(layer, face_base):
-            moved.append(layer.id)
-
-    # 2. Brows read through the fringe (Hiyori draws them above the bangs).
-    hair_front = occluders(SemanticRole.hair_front)
-    for layer in stack.layers:
-        if layer.semantic_role in BROWS and lift_above(layer, hair_front):
+        Lifted parts are re-stacked in their existing relative order and given *distinct* draw orders.
+        Order matters among them — the lips have to read on top of the cavity painted behind them — so
+        a shared "just above the occluder" value would leave that to a tie-break.
+        """
+        nxt: int | None = None
+        for layer in sorted(stack.layers, key=lambda ly: ly.draw_order):
+            if layer.semantic_role not in roles:
+                continue
+            box = box_by_part.get(layer.id)
+            if box is None:
+                continue
+            blocking = [t.draw_order for t in tops
+                        if t.draw_order > layer.draw_order
+                        and _covered_frac(box, box_by_part[t.id]) >= _COVER_MIN]
+            if not blocking:
+                continue
+            base = max(blocking) + 1
+            nxt = base if nxt is None else max(nxt + 1, base)
+            layer.draw_order = nxt
             if layer.id not in moved:
                 moved.append(layer.id)
+
+    # 1. No face feature hides under the skin.
+    lift_group(FACE_FEATURES, occluders(SemanticRole.face_base))
+    # 2. Brows read through the fringe (Hiyori draws them above the bangs).
+    lift_group(BROWS, occluders(SemanticRole.hair_front))
 
     stack.layers.sort(key=lambda ly: ly.draw_order)
     return moved

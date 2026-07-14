@@ -15,6 +15,7 @@ from .core import decompose, ingest, landmark, mesh, motion, physics, preprocess
 from .core.assemble import assemble_rig
 from .core.landmark import Landmarks
 from .core.rig import author_rig, select_template
+from .core.structure import normalize_face_zorder
 from .core.types import LayerStack
 from .irr.schema import Rig
 
@@ -25,8 +26,10 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     This is the headless entry point used once decomposition exists (real or synthetic), letting the
     whole spine run without standing up See-through.
     """
+    _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
     meshes = mesh.build_meshes(stack)
     _lift_occluded_accessories(stack, meshes)
+    normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
     template = select_template(stack)
     landmarks = _safe_landmarks(stack)
     authoring = author_rig(stack, meshes, template, landmarks=landmarks)
@@ -97,6 +100,17 @@ def _lift_occluded_accessories(stack: LayerStack, meshes) -> None:
         if occluding:
             nxt += 1
             L.draw_order = nxt
+
+
+def _safe_synth(stack: LayerStack) -> None:
+    """Paint the parts the decomposer cannot see. Tolerate a missing Pillow / unreadable texture so the
+    spine still runs (without a cavity the mouth simply stays shut, as it did before)."""
+    from .core.synth import synthesize_mouth_cavity
+
+    try:
+        synthesize_mouth_cavity(stack)
+    except (ImportError, OSError):
+        pass
 
 
 def _safe_physics(stack: LayerStack, parameters, meshes=None):

@@ -127,7 +127,20 @@ _UPPER_LIP_FRAC = 0.35  # upper-lip *rise* on open as a fraction of the lower-li
 #                         most of the opening, but a small upper-lip lift turns a jaw-slide into a
 #                         lens-shaped cavity. Both lips taper to the (anchored) mouth corners.
 _MOUTH_FORM = 0.35    # corner raise/lower as fraction of mouth height at +-1
-_BLINK = 1.0          # full collapse at 0
+_MOUTH_MIN_ASPECT = 0.55  # floor on the mouth's opening scale, as a fraction of its WIDTH. A decomposed
+#                         closed mouth is a *stroke* — on a real character, 21x6 px — so its height is the
+#                         line weight, not a mouth dimension. Scaling the open off that height parted the
+#                         lips by 4 px: the mouth never visibly opened. Width is always the mouth's true
+#                         extent, so it's the honest reference. The floor only binds when the layer is
+#                         abnormally flat (exactly the broken case); a well-formed mouth blob keeps its
+#                         own height and is unchanged.
+_BLINK = 0.85         # collapse toward the lid line at 0 — *not* all the way. A full (1.0) collapse
+#                       lands every vertex on the lid axis, so the triangles go zero-area and the eye
+#                       does not merely close, it *vanishes* into blank skin: the lash line that a shut
+#                       eye is actually drawn with disappears with it. Real rigs never degenerate the
+#                       eye — measured through the native core, Hiyori's most-collapsed eye mesh still
+#                       keeps 14.6% of its open height at ParamEyeLOpen=0 (several keep 90-100%). The
+#                       residual here is what remains visible as the closed-eye lid line.
 
 # Absolute displacement caps (model units, canvas ~= 1.0) that bound runaway warps on pathological
 # silhouettes — far below QA's 0.6 runaway gate, far above normal motion (head-turn ~0.14, mouth
@@ -197,16 +210,15 @@ def author_rig(
 
     # --- Mouth open -----------------------------------------------------------------------------
     mouth = members(SemanticRole.mouth)
+    cavity = members(SemanticRole.mouth_cavity)
     if mouth:
         if lm.mouth and lm.mouth.height > 1e-4:   # ignore a degenerate (collapsed) mouth landmark
             pivot_y = lm.mouth.center[1]
             height = max(lm.mouth.height, 1e-6)
-            params.append(_two_pose("ParamMouthOpenY", 0.0, 1.0, mouth,
-                                    lambda m: _open_lens(m, _MOUTH_OPEN, pivot_y, height)))
+            open_fn = lambda m: _open_lens(m, _MOUTH_OPEN, pivot_y, height)  # noqa: E731
         else:
-            params.append(
-                _two_pose("ParamMouthOpenY", 0.0, 1.0, mouth, lambda m: _drop_lower(m, _MOUTH_OPEN))
-            )
+            open_fn = lambda m: _drop_lower(m, _MOUTH_OPEN)                  # noqa: E731
+        params.append(_mouth_open("ParamMouthOpenY", mouth, cavity, open_fn))
         params.append(_mouth_form("ParamMouthForm", mouth, mouth_lm=lm.mouth))
 
     # --- Classify accessories as head- vs body-mounted ------------------------------------------
@@ -387,6 +399,31 @@ def _blink(param_id: str, group: list[tuple[str, Mesh]], *, axis_y: float | None
         closed = {pid: _collapse_to(m, _BLINK, axis_y) for pid, m in group}
     closed_kf = Keyform(value=0.0, mesh_offsets=closed)
     return _set_keyforms(param_id, [closed_kf, open_kf])
+
+
+def _mouth_open(
+    param_id: str,
+    lips: list[tuple[str, Mesh]],
+    cavity: list[tuple[str, Mesh]],
+    open_fn,
+) -> Parameter:
+    """Open the mouth: the lips part into a lens *and* the synthesised cavity behind them grows from
+    nothing into the gap they leave.
+
+    The two groups move oppositely, which is why this can't be a ``_two_pose``. The cavity is collapsed
+    **completely** when the mouth is shut — the degeneracy a blink must avoid is exactly what we want
+    here, because a closed mouth has to render as the bare lip line it always was, with no trace of the
+    part we painted behind it (see core.synth.mouth).
+    """
+    shut = Keyform(value=0.0, mesh_offsets={
+        **{pid: _zeros(m) for pid, m in lips},
+        **{pid: _collapse_vertical(m, 1.0) for pid, m in cavity},
+    })
+    opened = Keyform(value=1.0, mesh_offsets={
+        **{pid: open_fn(m) for pid, m in lips},
+        **{pid: _zeros(m) for pid, m in cavity},
+    })
+    return _set_keyforms(param_id, [shut, opened])
 
 
 def _two_pose(
@@ -688,24 +725,29 @@ def _collapse_to(m: Mesh, amount: float, cy: float) -> list[Vec2]:
 
 
 def _open_lens(m: Mesh, amount: float, pivot_y: float, height: float) -> list[Vec2]:
-    """A **lens-shaped** mouth open about the lip line ``pivot_y`` (normalized by mouth ``height``):
-    the lower lip drops and the upper lip rises a smaller amount (``_UPPER_LIP_FRAC``), both tapering to
-    zero at the mouth *corners* so the opening reads as a cavity, not a jaw-slide. The horizontal taper
-    uses the mesh's own bbox (anchoring its true corners), so it's robust to a degenerate-width landmark;
-    ``pivot_y``/``height`` come from the landmark (or the bbox mid/extent in the fallback). Every shift
-    is capped at ``_MOUTH_CAP`` to bound an over-measured See-through mouth layer."""
+    """A **lens-shaped** mouth open about the lip line ``pivot_y``: the lower lip drops and the upper lip
+    rises a smaller amount (``_UPPER_LIP_FRAC``), both tapering to zero at the mouth *corners* so the
+    opening reads as a cavity, not a jaw-slide. The horizontal taper uses the mesh's own bbox (anchoring
+    its true corners), so it's robust to a degenerate-width landmark; ``pivot_y``/``height`` come from the
+    landmark (or the bbox mid/extent in the fallback). Every shift is capped at ``_MOUTH_CAP`` to bound an
+    over-measured See-through mouth layer.
+
+    The opening scale is floored against the mouth's **width** (see ``_MOUTH_MIN_ASPECT``) because a
+    decomposed *closed* mouth is a stroke — its height is the line weight, not the mouth.
+    """
     x0, _, x1, _ = _bbox(m.vertices)
     cx = (x0 + x1) / 2.0
     half = max((x1 - x0) / 2.0, 1e-6)
+    scale = max(height, _MOUTH_MIN_ASPECT * (x1 - x0))
     out: list[Vec2] = []
     for x, y in m.vertices:
         taper = max(0.0, 1.0 - abs(x - cx) / half)          # 1 at centre -> 0 at/beyond the corners
         if y < pivot_y:                                     # lower lip: drops
-            factor = min(1.0, (pivot_y - y) / height)
-            out.append((0.0, -min(amount * height * factor * taper, _MOUTH_CAP)))
+            factor = min(1.0, (pivot_y - y) / scale)
+            out.append((0.0, -min(amount * scale * factor * taper, _MOUTH_CAP)))
         else:                                               # upper lip: smaller rise
-            factor = min(1.0, (y - pivot_y) / height)
-            out.append((0.0, min(_UPPER_LIP_FRAC * amount * height * factor * taper, _MOUTH_CAP)))
+            factor = min(1.0, (y - pivot_y) / scale)
+            out.append((0.0, min(_UPPER_LIP_FRAC * amount * scale * factor * taper, _MOUTH_CAP)))
     return out
 
 

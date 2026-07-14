@@ -222,13 +222,14 @@ def test_end_to_end_synthetic_dir_to_inp(tmp_path):
 
     stack = decompose.from_layer_dir(layer_dir)
     rig = rig_from_stack(stack, name="synthetic", source="synthetic")
-    assert rig.part_ids() == {"00_face_base", "10_eye_l", "11_eye_r", "20_mouth"}
+    # "20_mouth_cavity" is synthesised: the decomposed mouth is only a lip line, with no interior
+    assert rig.part_ids() == {"00_face_base", "10_eye_l", "11_eye_r", "20_mouth", "20_mouth_cavity"}
     assert "ParamMouthOpenY" in rig.parameter_ids()
 
     out = NijiliveEmitter(asset_root=layer_dir).emit(rig, tmp_path)
     inp = InpFile.read(out)
     puppet = json.loads(inp.payload)
-    assert len(inp.textures) == 4
+    assert len(inp.textures) == 5          # 4 decomposed + the synthesised mouth cavity
     assert all(t.data[:8] == b"\x89PNG\r\n\x1a\n" for t in inp.textures)
     def _part_names(node):  # parts may be nested under the 'head' group node now
         acc = {node["name"]} if node.get("type") == "Part" else set()

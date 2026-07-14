@@ -62,6 +62,23 @@ def test_physics3_maps_rigs():
     assert doc["Meta"]["VertexCount"] == sum(len(x["Vertices"]) for x in doc["PhysicsSettings"])
 
 
+def test_physics3_vertices_stay_in_the_real_pro_regime():
+    """P0 feel-parity guard: every emitted swinging tip must keep Mobility/Delay/Acceleration inside the
+    range real pro rigs use (Hiyori ∪ Akari, measured via tools/feel_parity.py) — so a future tuning
+    edit can't silently drift our Cubism physics out of the regime a Live2D runtime expects."""
+    from image2live2d.backends.live2d.physics3 import _vertices
+    # measured union across Hiyori + Akari physics3.json (see tools/feel_parity.py)
+    MOB, DELAY, ACCEL = (0.71, 1.00), (0.60, 1.00), (0.80, 3.00)
+    # sweep the mass/drag ranges the dynamics score actually emits (light bang -> heavy back hair)
+    for mass in (0.5, 1.0, 1.4, 2.0, 3.0):
+        for drag in (0.0, 0.1, 0.3, 0.5, 0.9):
+            tip = _vertices(mass, drag, length=1.0)[1]
+            assert MOB[0] <= tip["Mobility"] <= MOB[1], (mass, drag, tip["Mobility"])
+            assert DELAY[0] <= tip["Delay"] <= DELAY[1], (mass, drag, tip["Delay"])
+            assert ACCEL[0] <= tip["Acceleration"] <= ACCEL[1], (mass, drag, tip["Acceleration"])
+            assert tip["Radius"] == tip["Position"]["Y"]     # real convention: tip radius = its Y
+
+
 # --------------------------------------------------------------------------------------------------
 # motion3
 # --------------------------------------------------------------------------------------------------

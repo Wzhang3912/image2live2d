@@ -455,7 +455,14 @@ async function loadCubism(){
   try{
     if(!L2D.loaded){
       ph.textContent='loading Cubism Core…';
-      await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js');
+      // Prefer a self-hosted Core (works offline / under strict CSP if the operator set
+      // IMAGE2LIVE2D_CUBISM_CORE_JS); the server returns an empty stub when it isn't set, so fall back
+      // to the official CDN whenever the global is still absent. Proprietary -> never bundled.
+      try{ await loadScript('/cubismcore/live2dcubismcore.min.js'); }catch(_){}
+      if(typeof Live2DCubismCore==='undefined'){
+        await loadScript('https://cubism.live2d.com/sdk-web/cubismcore/live2dcubismcore.min.js').catch(()=>{});
+      }
+      if(typeof Live2DCubismCore==='undefined') throw new Error('Cubism Core unavailable (offline? set IMAGE2LIVE2D_CUBISM_CORE_JS to self-host)');
       L2D.loaded=true;
     }
     ph.textContent='building .moc3 bundle…';

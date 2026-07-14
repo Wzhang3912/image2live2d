@@ -638,6 +638,21 @@ def _make_handler():
                 page = _PAGE.replace("__DECOMPOSE_READY__", "true" if _flat_decompose_available() else "false")
                 self._send(200, page.encode(), "text/html; charset=utf-8")
                 return
+            if path == "/favicon.ico":
+                self._send(204, b"", "image/x-icon")   # no favicon -> silence the browser's auto-request
+                return
+            if path == "/cubismcore/live2dcubismcore.min.js":
+                # Optional self-hosted Cubism Core (proprietary — never committed): if the operator points
+                # IMAGE2LIVE2D_CUBISM_CORE_JS at a local copy, serve it so the Cubism render works offline
+                # / under a strict CSP. Absent -> empty 200 stub, and the page falls back to the official CDN.
+                local = os.environ.get("IMAGE2LIVE2D_CUBISM_CORE_JS")
+                if local and Path(local).is_file():
+                    self._send(200, Path(local).read_bytes(), "application/javascript")
+                else:
+                    # empty 200 stub (not 404) so the page's local-first <script> probe loads cleanly
+                    # with no console error; Live2DCubismCore stays undefined -> the page uses the CDN.
+                    self._send(200, b"/* no self-hosted cubism core */\n", "application/javascript")
+                return
             parts = path.strip("/").split("/")
             if len(parts) >= 3 and parts[0] == "api" and parts[1] == "jobs":
                 job = get_job(parts[2])

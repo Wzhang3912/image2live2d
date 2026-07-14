@@ -99,3 +99,46 @@ def test_make_parameter_mints_strand_ids():
     assert make_parameter("ParamHairFront3").id == "ParamHairFront3"
     with pytest.raises(KeyError):
         make_parameter("ParamBogus9")
+
+
+def test_hair_sways_like_a_cantilever_not_a_sliding_sheet():
+    """The roots stay clamped to the scalp; the motion belongs to the tips.
+
+    A linear taper let the whole sheet shear sideways: a fringe slid bodily off the forehead, exposing
+    the hairline so the character read as balding. Hair is a cantilever — stiff where it is attached —
+    and the real thing is far more tip-concentrated than linear: measured through the native Cubism core,
+    a mid-strand vertex of Hiyori's bangs moves 0.11x its tip, where a linear taper would give 0.5x.
+    """
+    from pathlib import Path
+
+    from image2live2d.core.mesh import grid_mesh
+    from image2live2d.core.rig import author_rig, select_template
+    from image2live2d.core.types import Layer, LayerStack
+    from image2live2d.irr.schema import SemanticRole as R
+
+    layers = [Layer(id="hair_front", semantic_role=R.hair_front, texture_path=Path("h.png"),
+                    draw_order=90, width=64, height=64),
+              Layer(id="face_base", semantic_role=R.face_base, texture_path=Path("f.png"),
+                    draw_order=0, width=64, height=64)]
+    meshes = [grid_mesh("hair_front", (0.30, 0.60, 0.70, 0.95), lambda u, v: 255, grid=8),
+              grid_mesh("face_base", (0.30, 0.55, 0.70, 0.92), lambda u, v: 255, grid=2)]
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    params = author_rig(stack, meshes, select_template(stack)).parameters
+
+    sway = next(p for p in params if p.id.startswith("ParamHairFront"))
+    kf = max(sway.keyforms, key=lambda k: k.value)
+    offs = kf.mesh_offsets["hair_front"]
+    hm = next(m for m in meshes if m.part_id == "hair_front")
+    top = max(y for _, y in hm.vertices)
+    length = top - min(y for _, y in hm.vertices)
+
+    def dx_at(depth_frac, tol=0.08):
+        vals = [abs(offs[i][0]) for i, (_, y) in enumerate(hm.vertices)
+                if abs((top - y) / length - depth_frac) < tol]
+        return sum(vals) / len(vals)
+
+    root, mid, tip = dx_at(0.0), dx_at(0.5), dx_at(1.0)
+    assert root == pytest.approx(0.0, abs=1e-9)      # clamped at the scalp
+    assert tip > 0.0                                 # the tips still swing
+    # quadratic: mid moves ~1/4 of the tip, not the ~1/2 a shearing sheet would give
+    assert mid / tip < 0.35

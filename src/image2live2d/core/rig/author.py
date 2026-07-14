@@ -103,8 +103,20 @@ _ANGLE_Z_DEG = 12.0   # head tilt degrees at its extreme
 _BODY_TURN_X = math.radians(8.0)  # body sway at its extreme (range +-10)
 _BODY_TURN_Y = math.radians(6.0)
 _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
-_HAIR_SWAY = 0.22     # hair-tip swing as fraction of strand length at +-1 (roots stay) — gentle so
-#                       hair reads as attached to the head, not flying off it
+_SWAY_TAPER = 2.0     # how the swing grows from root to tip, as depth**_SWAY_TAPER. Hair is a
+#                       cantilever: it is *stiff where it is attached* and free at the ends, and a beam
+#                       clamped at one end deflects quadratically along its length. The taper used to be
+#                       linear (=1.0), which let the whole sheet shear sideways — a fringe slid bodily
+#                       off the forehead and exposed the hairline, so the character read as balding. The
+#                       real thing is far more tip-concentrated than linear: measured through the native
+#                       core, a mid-strand vertex of Hiyori's bangs moves 0.11x its tip (a linear taper
+#                       would give 0.5x). Squaring pins the roots to the scalp and puts the motion in the
+#                       tips, where hair actually moves.
+_HAIR_SWAY = 0.12     # hair-tip swing as fraction of strand length at +-1 (roots stay). Measured against
+#                       the real thing: Hiyori's bang tip travels 0.0156 over a 0.161-long strand, i.e.
+#                       ~10% of its own length. We were at 22% — twice a real rig — which swept the fringe
+#                       far enough across the head to bare the hairline. Gentle, so hair reads as attached
+#                       to the head rather than flying off it.
 _ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways subtly off its mount)
 _GARMENT_SWAY = 0.20  # cape/sleeve dangle: between an ornament and a skirt hem (a bigger sheet of cloth)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
@@ -538,16 +550,21 @@ def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | Non
 
     ``indices`` (a strand's own vertices, e.g. one lobe of a shared mesh) restricts the sway to those
     vertices — the rest of the part is held at zero — so lobes of one part swing independently and the
-    strand hangs from its *own* top. ``None`` sways the whole mesh (the single-lobe case)."""
+    strand hangs from its *own* top. ``None`` sways the whole mesh (the single-lobe case).
+
+    The swing grows as ``depth ** _SWAY_TAPER`` — see that constant. A linear taper let the whole sheet
+    shear, which slid a fringe off the forehead."""
     verts = mesh.vertices
     owned = range(len(verts)) if indices is None else indices
-    _, _, _, top = _bbox([verts[i] for i in owned])
+    _, bottom, _, top = _bbox([verts[i] for i in owned])
+    length = max(top - bottom, 1e-6)
 
     def at(sign: float) -> dict[str, list[Vec2]]:
         cell: list[Vec2] = [(0.0, 0.0)] * len(verts)
         for vi in owned:
             _, y = verts[vi]
-            cell[vi] = (sign * amount * (top - y), 0.0)
+            depth = (top - y) / length                  # 0 at the root, 1 at the tip
+            cell[vi] = (sign * amount * length * depth ** _SWAY_TAPER, 0.0)
         return {part_id: cell}
 
     return _tri(param_id, at)

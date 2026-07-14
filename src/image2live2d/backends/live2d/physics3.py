@@ -50,13 +50,32 @@ def _vertices(mass: float, drag: float, length: float) -> list[dict]:
     ]
 
 
-def _input_type(param_id: str) -> str:
-    """Cubism physics Input type for a driver param: roll (…Z) rotates the anchor ("Angle"); horizontal
-    (…X) and vertical (…Y) turns TRANSLATE it ("X"/"Y") — translation is what actually swings a strand."""
+def _input_type(param_id: str) -> str | None:
+    """Cubism physics Input type for a driver param, or ``None`` if the param cannot drive a pendulum.
+
+    Roll (…Z) tips the gravity vector ("Angle"); yaw (…X) translates the anchor sideways ("X"), and
+    sideways translation is what actually swings a strand.
+
+    **Pitch (…Y) drives nothing, and is dropped.** We used to emit it as ``Type: "Y"``, with a comment
+    claiming a nod would bob the hair. It cannot. A "Y" input slides the pendulum's anchor straight
+    *down its own string*, and every physics output is ``Type: "Angle"`` — an angle off the strand's
+    rest direction. Sliding a pivot along the string it hangs from does not change that angle by any
+    amount, so the input contributed exactly zero, forever. That is not a reading of the spec, it is
+    what the simulation does (``tools/physics_excite.py``: the ``head_pitch`` clip moved 0 of 8 chains),
+    and it is what the real rigs say: **neither Hiyori nor Akari emits a single "Y" input** — Hiyori's
+    hair takes ``X:ParamAngleX`` + ``Angle:ParamAngleZ``, and Akari feeds even *ParamAngleY* in as
+    type "X".
+
+    Which leaves a real, honest gap: in Cubism, a nod does not swing the hair *through physics* at all.
+    It moves the hair through the head-turn deformation, like the rest of the head. Giving pitch its own
+    secondary motion would need a second output parameter carrying a *vertical* hair offset — the sway
+    keyform we author today is purely horizontal, so feeding pitch in as "X" (Akari's trick) would swing
+    the hair sideways on a nod, which is worse than nothing.
+    """
     if param_id.endswith("Z"):
         return "Angle"
     if param_id.endswith("Y"):
-        return "Y"
+        return None
     return "X"
 
 
@@ -72,19 +91,30 @@ def physics3(rig: Rig) -> dict:
         total_vertices += len(verts)
         settings.append({
             "Id": setting_id,
-            # one Input per driver (primary + extras) so all driving motion excites the pendulum.
-            # Input TYPE is critical: X/Y angle params TRANSLATE the pendulum anchor (Type "X"/"Y"), which
-            # actually swings a hanging strand; only roll (…Z) ROTATES it (Type "Angle"). Emitting "Angle"
-            # for everything (the old bug) rotated the anchor instead of moving it -> the pendulum was
-            # barely excited and the hair never visibly swung. Convention verified against Hiyori.
+            # One Input per driver (primary + extras) that can actually drive a pendulum. Input TYPE is
+            # critical: yaw (…X) TRANSLATES the anchor sideways, which is what swings a hanging strand;
+            # roll (…Z) tips gravity (Type "Angle"). Emitting "Angle" for everything (an older bug)
+            # rotated the anchor instead of moving it, and the hair never visibly swung. Pitch (…Y) is
+            # dropped entirely — see _input_type: it is a mathematical no-op for an Angle output, and no
+            # real rig emits one.
             "Input": [
                 {"Source": {"Target": "Parameter", "Id": d}, "Weight": _INPUT_WEIGHT,
-                 "Type": _input_type(d), "Reflect": False}
-                for d in ph.all_drivers()
+                 "Type": t, "Reflect": False}
+                for d in ph.all_drivers() if (t := _input_type(d))
             ],
             "Output": [{
                 "Destination": {"Target": "Parameter", "Id": ph.output_param},
-                "VertexIndex": len(verts),  # 1-based: the swinging tip drives the output
+                # The swinging TIP drives the output — and it is a **0-based index into the particle
+                # array**, so the tip is len(verts) - 1, not len(verts). We wrote len(verts) for months.
+                # It did not crash, and that is exactly why it survived: the Cubism runtime keeps every
+                # setting's particles in one contiguous buffer and does
+                # `particles[VertexIndex] - particles[VertexIndex - 1]` with no bounds check, so an index
+                # one past our chain quietly read *the next chain's root particle*. Every hair output was
+                # being computed from a neighbouring pendulum, and the last chain read off the end of the
+                # buffer entirely. The hair still moved, which is the whole trap — it moved for the wrong
+                # reason. Verified against both real models on hand: Hiyori and Akari never emit a
+                # VertexIndex >= len(Vertices) (Hiyori taps 1..7 of an 11-particle chain).
+                "VertexIndex": len(verts) - 1,
                 # Hair gets a higher output scale so the physics swing reaches a visibly larger sway (more
                 # "alive"); cloth/skirt stays at unity to avoid over-driving the fabric.
                 "Scale": 1.4 if ph.output_param.startswith("ParamHair") else 1.0,

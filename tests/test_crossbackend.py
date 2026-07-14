@@ -65,6 +65,17 @@ def _niji_output_drivers(puppet) -> dict[str, set[str]]:
 
 
 def test_physics_pairs_match_across_backends():
+    """Both backends hang the same pendulums off the same drivers — with one deliberate exception.
+
+    Cubism **cannot** use a pitch (…Y) driver. Its physics outputs are all ``Type: "Angle"`` — the
+    strand's angle off its rest direction — and a "Y" input slides the anchor straight down the strand,
+    which changes that angle by exactly nothing. So the Cubism emitter drops pitch drivers rather than
+    emit an input that provably does nothing (neither Hiyori nor Akari emits one either). nijilive's
+    SimplePhysics takes pitch as a vertical anchor translation, so it keeps it.
+
+    The IRR remains the superset: it records what *drives* each pendulum, and each backend expresses as
+    much of that as its runtime can.
+    """
     rig = _rig()
     niji = _niji_output_drivers(build_puppet(rig).puppet)
     live2d = {
@@ -72,8 +83,15 @@ def test_physics_pairs_match_across_backends():
         for s in physics3(rig)["PhysicsSettings"]
     }
     irr = {ph.output_param: set(ph.all_drivers()) for ph in rig.physics}
-    assert niji == live2d == irr      # same output->drivers mapping on both backends and the IRR
+
+    assert niji == irr                 # nijilive expresses every driver the IRR records
     assert irr                         # non-empty (hair + skirt zones)
+    # Cubism expresses all of them except pitch, and drops nothing else
+    expressible = {out: {d for d in drivers if not d.endswith("Y")} for out, drivers in irr.items()}
+    assert live2d == expressible
+    assert any(d.endswith("Y") for drivers in irr.values() for d in drivers), (
+        "fixture no longer has a pitch driver — this test is no longer checking anything"
+    )
     # skirt zones are multi-driven (body sway + lean) — "all lower body affects the skirt"
     assert any(len(d) > 1 for d in irr.values())
 

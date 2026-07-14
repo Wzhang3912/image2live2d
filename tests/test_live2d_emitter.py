@@ -57,9 +57,33 @@ def test_physics3_maps_rigs():
     s = doc["PhysicsSettings"][0]
     assert s["Input"][0]["Source"]["Id"] in rig.parameter_ids()
     assert s["Output"][0]["Destination"]["Id"] in rig.parameter_ids()
-    assert s["Output"][0]["VertexIndex"] == len(s["Vertices"])  # tip drives output
     # vertex count meta matches
     assert doc["Meta"]["VertexCount"] == sum(len(x["Vertices"]) for x in doc["PhysicsSettings"])
+
+
+def test_physics3_output_taps_a_particle_that_exists():
+    """``VertexIndex`` is a **0-based index into the particle array**, so the swinging tip is
+    ``len(Vertices) - 1``.
+
+    We emitted ``len(Vertices)`` — one past the end — and this very test asserted it, which is how it
+    survived. It never crashed, because the Cubism runtime keeps all settings' particles in one
+    contiguous buffer and does ``particles[i] - particles[i-1]`` unchecked: an index one past our chain
+    silently read the *next* chain's root particle, so every hair output was driven by a neighbouring
+    pendulum and the last chain read off the end of the buffer. The hair moved, just for the wrong
+    reason — which is exactly why an eyeball check could never have caught it.
+
+    Both real models on hand obey the invariant below: Hiyori taps 1..7 of an 11-particle chain, Akari
+    taps 1..3 of a 4-particle chain. Neither ever emits ``VertexIndex >= len(Vertices)``.
+    """
+    doc = physics3(_rig())
+    for s in doc["PhysicsSettings"]:
+        for out in s["Output"]:
+            assert 1 <= out["VertexIndex"] <= len(s["Vertices"]) - 1, (
+                f"{s['Id']}: VertexIndex {out['VertexIndex']} is not a particle of a "
+                f"{len(s['Vertices'])}-particle chain"
+            )
+        # ...and for our single-segment pendulums that means the tip, which is the last particle
+        assert s["Output"][0]["VertexIndex"] == len(s["Vertices"]) - 1
 
 
 def test_physics3_vertices_stay_in_the_real_pro_regime():

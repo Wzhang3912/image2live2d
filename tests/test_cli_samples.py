@@ -32,8 +32,8 @@ def test_sample_layers_drive_the_spine(tmp_path):
     layers = make_sample_layers(tmp_path / "layers", size=256)
     stack = decompose.from_layer_dir(layers)
     rig = rig_from_stack(stack, name="sample")
-    # all 12 parts present, blink + mouth + head-turn authored
-    assert len(rig.parts) == 12
+    # all 12 parts present (+1 synthesised mouth cavity), blink + mouth + head-turn authored
+    assert len(rig.parts) == 13
     assert {"ParamEyeLOpen", "ParamMouthOpenY", "ParamAngleX"} <= rig.parameter_ids()
     # meshes are non-trivial (tightened grids actually clipped to the drawn art)
     assert all(len(m.vertices) >= 3 for m in rig.meshes)
@@ -63,6 +63,6 @@ def test_cli_sample_emits_loadable_inp(tmp_path):
 
     inp = InpFile.read(out)
     puppet = json.loads(inp.payload)
-    assert len(inp.textures) == 12
+    assert len(inp.textures) == 13          # 12 decomposed + the synthesised mouth cavity
     assert puppet["meta"]["name"] == "sample"
     assert {"ParamMouthOpenY", "ParamEyeLOpen"} <= {p["name"] for p in puppet["param"]}

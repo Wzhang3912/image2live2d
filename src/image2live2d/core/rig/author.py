@@ -312,8 +312,19 @@ def author_rig(
         params.append(_rotation("ParamBodyAngleZ", body, bcenter, deg=_BODY_Z_DEG))
 
     # --- Limb articulation (arms/legs swing about their joint) -----------------------------------
-    # Needs landmark joints (shoulder/hip = top-center of each limb silhouette). Non-standard params
-    # (ParamArm*/ParamLeg*) — see irr.params. Each limb rotates rigidly about its own joint.
+    # The joint comes from the limb's OWN split mesh, not from the landmark extractor. The de-cardboard
+    # split leaves arm_l and arm_r sharing one full-canvas texture (both arms are in its alpha), so the
+    # silhouette-based landmark reads the centroid of *both* arms — the body midline — and hands every
+    # limb a pivot at its own inner edge. Rotating the left arm about a point at its far-right edge
+    # swung the hand in a wide arc and tore it off the sleeve; legs flung their feet clean off. The mesh
+    # carries only this side's triangles, so its bbox is the honest per-limb geometry — see _limb_joints.
+    # Non-standard params (ParamArm*/ParamLeg*) — see irr.params.
+    # Parts a limb might carry at its end (shoe, cuff): anything that isn't itself a limb. The geometry
+    # filter in _limb_riders decides which limb, if any, actually claims each one.
+    _LIMB_ROLES = frozenset({SemanticRole.arm_l, SemanticRole.arm_r,
+                             SemanticRole.leg_l, SemanticRole.leg_r})
+    all_limb_candidates = [(layer.id, mesh_by_part[layer.id]) for layer in stack.layers
+                           if layer.id in mesh_by_part and layer.semantic_role not in _LIMB_ROLES]
     for role, swing_id, bend_id, swing_deg, bend_deg in (
         (SemanticRole.arm_l, "ParamArmLA", "ParamArmLB", _ARM_DEG, _ELBOW_DEG),
         (SemanticRole.arm_r, "ParamArmRA", "ParamArmRB", _ARM_DEG, _ELBOW_DEG),
@@ -321,13 +332,18 @@ def author_rig(
         (SemanticRole.leg_r, "ParamLegRA", "ParamLegRB", _LEG_DEG, _KNEE_DEG),
     ):
         limb = members(role)
-        joint = lm.joints.get(role.value)                       # shoulder / hip
-        if limb and joint:
-            params.append(_rotation(swing_id, limb, joint, deg=swing_deg))   # whole-limb swing
-        elbow = lm.joints.get(f"{role.value}_mid")              # elbow / knee
-        end = lm.joints.get(f"{role.value}_end")                # wrist / ankle
-        if limb and elbow and end:
-            params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg))  # lower-segment bend
+        if not limb:
+            continue
+        # A limb has to carry whatever rides its distal end — the shoe at a foot, a cuff at a wrist —
+        # or articulation moves the leg and leaves the shoe standing on the floor (the second half of
+        # the leg-disconnect the render showed). Those parts are separate layers (footwear arrives as
+        # its own "clothing"), so we find them by geometry: sitting at/below the limb's far end, within
+        # its lateral span. They then swing and bend with the limb like the rest of it.
+        riders = _limb_riders([m for _, m in limb], all_limb_candidates)
+        limb = limb + riders
+        joint, elbow, end = _limb_joints([m for _, m in members(role)])      # joint from the limb only
+        params.append(_rotation(swing_id, limb, joint, deg=swing_deg))       # whole-limb swing
+        params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg))   # lower-segment bend
 
     # --- Breath (subtle whole-character bob) ----------------------------------------------------
     all_parts = [
@@ -783,6 +799,48 @@ def _union_bbox(meshes: list[Mesh]) -> tuple[float, float, float, float]:
 def _union_center(meshes: list[Mesh]) -> Vec2:
     x0, y0, x1, y1 = _union_bbox(meshes)
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
+
+
+def _limb_joints(meshes: list[Mesh]) -> tuple[Vec2, Vec2, Vec2]:
+    """``(shoulder/hip, elbow/knee, wrist/ankle)`` down the limb's own vertical axis.
+
+    A hanging arm or leg attaches at the top of its silhouette and dangles down, so the swing pivot is
+    the top-centre, the end is the bottom-centre, and the bend joint sits halfway between. Taking the
+    centre from the limb's *mesh* (which holds only this side's triangles after the de-cardboard split)
+    is what keeps the left arm pivoting on its own shoulder instead of the body midline — the landmark
+    silhouette can't, because the split halves share one two-armed texture.
+    """
+    x0, y0, x1, y1 = _union_bbox(meshes)
+    cx = (x0 + x1) / 2.0
+    top, bot = y1, y0                                   # y-up: shoulder/hip at the top, wrist/ankle low
+    return (cx, top), (cx, (top + bot) / 2.0), (cx, bot)
+
+
+# A rider (shoe/cuff) attaches at the limb's distal END: its top sits in a band around the limb's
+# bottom — a little above (it overlaps the ankle) down to a quarter of the limb below it. That the top
+# must be *near* the end, not merely below it, is what stops a shoe from also attaching to the arm two
+# body-lengths up: the shoe is below the arm, but nowhere near the wrist.
+_RIDER_END_FRAC = 0.25      # how far below the limb's end a rider's top may start
+_RIDER_OVERLAP = 0.15       # how far it may reach up into the limb (overlap at the ankle)
+
+
+def _limb_riders(
+    limb_meshes: list[Mesh], candidates: list[tuple[str, Mesh]],
+) -> list[tuple[str, Mesh]]:
+    """The parts that hang off a limb's far end and must move with it (a shoe at a foot, a cuff at a
+    wrist). Chosen purely by geometry so it doesn't depend on a footwear role the decomposer may not
+    label: the part's top sits at the limb's distal end, laterally within the limb's own column."""
+    lx0, ly0, lx1, ly1 = _union_bbox(limb_meshes)
+    h = ly1 - ly0
+    hi = ly0 + _RIDER_END_FRAC * h                      # top may start this far below the end...
+    lo = ly0 - _RIDER_OVERLAP * h                       # ...up to this far into the limb (the ankle)
+    riders: list[tuple[str, Mesh]] = []
+    for pid, m in candidates:
+        cx0, cy0, cx1, cy1 = _bbox(m.vertices)
+        ccx = (cx0 + cx1) / 2.0
+        if lo <= cy1 <= hi and lx0 <= ccx <= lx1:      # top at the limb's end, and in its column
+            riders.append((pid, m))
+    return riders
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

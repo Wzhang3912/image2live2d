@@ -145,9 +145,38 @@ def test_limb_params_exempt_from_deform_cap():
     assert other.keyforms[0].mesh_offsets["x"][0][0] == pytest.approx(0.28)  # ordinary param clamped
 
 
-def test_no_joints_no_limb_params():
-    # limbs present but no landmark joints -> no articulation authored (graceful)
+def test_a_shoe_rides_the_leg_it_sits_under():
+    """The second half of the leg-disconnect: a shoe is a separate part, so leg articulation used to
+    move the leg and leave the shoe on the floor. A part at a limb's distal end now moves with it."""
+    parts = [
+        ("leg_l", R.leg_l, (0.50, 0.10, 0.58, 0.45)),
+        ("leg_r", R.leg_r, (0.42, 0.10, 0.50, 0.45)),
+        ("shoe_l", R.clothing, (0.49, 0.02, 0.59, 0.12)),   # under leg_l's foot
+        ("shoe_r", R.clothing, (0.41, 0.02, 0.51, 0.12)),   # under leg_r's foot
+        ("skirt", R.clothing, (0.38, 0.45, 0.62, 0.60)),    # well above the legs — must NOT ride them
+    ]
+    layers, meshes = [], []
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=64, height=64))
+        meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=3))
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+
+    auth = author_rig(stack, meshes, select_template(stack), landmarks=None)
+    swing = next(p for p in auth.parameters if p.id == "ParamLegLA")
+    kf = next(k for k in swing.keyforms if k.value == swing.max)
+    moved = {pid for pid, offs in kf.mesh_offsets.items() if any(dx or dy for dx, dy in offs)}
+    assert "shoe_l" in moved       # the shoe swings with its leg
+    assert "shoe_r" not in moved   # the other leg's shoe does not
+    assert "skirt" not in moved    # and the skirt, far above the feet, is untouched
+
+
+def test_limbs_authored_from_mesh_without_landmark_joints():
+    # Limbs no longer depend on landmark joints: the joint is derived from each limb's own split mesh
+    # (the landmark silhouette is of both limbs at once — see author._limb_joints). So articulation is
+    # authored whether landmarks carry joints, are empty, or are absent entirely.
     stack, meshes = _limb_stack()
-    auth = author_rig(stack, meshes, select_template(stack), landmarks=Landmarks(joints={}))
-    ids = {p.id for p in auth.parameters}
-    assert not ({"ParamArmLA", "ParamArmLB"} & ids)
+    for lm in (Landmarks(joints={}), None):
+        auth = author_rig(stack, meshes, select_template(stack), landmarks=lm)
+        ids = {p.id for p in auth.parameters}
+        assert {"ParamArmLA", "ParamArmLB", "ParamLegLA", "ParamLegRA"} <= ids

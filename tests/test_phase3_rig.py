@@ -195,25 +195,44 @@ _LIMB_PARTS = [("face_base", R.face_base, (0.2, 0.5, 0.8, 0.95)),
                ("leg_l", R.leg_l, (0.40, 0.00, 0.50, 0.25))]
 
 
-def test_limbs_emitted_with_joints():
-    stack, meshes = _stack_and_meshes(_LIMB_PARTS)
-    lm = Landmarks(joints={"arm_l": (0.27, 0.55), "leg_l": (0.45, 0.25)})
-    params = author_rig(stack, meshes, select_template(stack), landmarks=lm).parameters
-    assert _param(params, "ParamArmLA") is not None
-    assert _param(params, "ParamLegLA") is not None
-    # rotation actually moves the limb at the extreme
-    arm = _param(params, "ParamArmLA")
-    moved = any(dx or dy for dx, dy in _kf(arm, arm.max).mesh_offsets["arm_l"])
-    assert moved
+def test_limbs_emitted_from_mesh_geometry():
+    """Limbs are authored from their own mesh, so they no longer need (or trust) landmark joints.
 
-
-def test_no_limbs_without_joints():
+    The joint used to come from a silhouette landmark, but the de-cardboard split leaves the two arms
+    sharing one texture, so that silhouette is of *both* arms and its centroid is the body midline. The
+    mesh carries only this side's triangles, so it is the honest source — and it is present whether or
+    not landmarks were extracted."""
     stack, meshes = _stack_and_meshes(_LIMB_PARTS)
-    # landmarks present but no joints -> no limb params (and None landmarks likewise)
     for lm in (Landmarks(), None):
         params = author_rig(stack, meshes, select_template(stack), landmarks=lm).parameters
-        assert _param(params, "ParamArmLA") is None
-        assert _param(params, "ParamLegLA") is None
+        assert _param(params, "ParamArmLA") is not None
+        assert _param(params, "ParamLegLA") is not None
+        arm = _param(params, "ParamArmLA")
+        moved = any(dx or dy for dx, dy in _kf(arm, arm.max).mesh_offsets["arm_l"])
+        assert moved
+
+
+def test_limb_pivots_on_its_own_centre_not_the_midline():
+    """The bug the Cubism render caught: a limb pivoting on the body midline instead of its own
+    shoulder swings the far end (the hand/foot) in a wide arc and tears it off the body.
+
+    ``arm_l`` sits at x 0.20-0.35 (centre 0.275); the body midline is 0.50. A rotation about the true
+    shoulder barely moves the top of the limb and moves the bottom the most — a hinge. A rotation about
+    the midline (0.225 to the arm's right) instead throws the *whole* limb sideways, so even the topmost
+    vertices shift a lot. We assert the top stays put relative to the bottom, which only holds if the
+    pivot is on the limb."""
+    stack, meshes = _stack_and_meshes(_LIMB_PARTS)
+    params = author_rig(stack, meshes, select_template(stack), landmarks=None).parameters
+    arm_mesh = next(m for m in meshes if m.part_id == "arm_l")
+    arm = _param(params, "ParamArmLA")
+    offs = _kf(arm, arm.max).mesh_offsets["arm_l"]
+
+    ys = [y for _, y in arm_mesh.vertices]
+    top_y, bot_y = max(ys), min(ys)
+    top_shift = max(abs(offs[i][0]) for i, (_, y) in enumerate(arm_mesh.vertices) if y == top_y)
+    bot_shift = max(abs(offs[i][0]) for i, (_, y) in enumerate(arm_mesh.vertices) if y == bot_y)
+    # a true shoulder hinge: the shoulder end barely moves, the hand end moves most
+    assert top_shift < 0.25 * bot_shift, (top_shift, bot_shift)
 
 
 # --------------------------------------------------------------------------------------------------

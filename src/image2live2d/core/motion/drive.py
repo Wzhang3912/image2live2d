@@ -106,18 +106,21 @@ _DRIVES: dict[str, Drive] = {
     # --- limbs: the de-cardboard check ------------------------------------------------------------
     # Both arms used to arrive as a single layer, so they could only ever move as one sheet. These two
     # clips are how you confirm they were separated: if the arms move together here, the split failed.
+    # Both arms to +max = both lift outward together (mirror-symmetric convention), a symmetric raise.
+    # One-directional: raise and return, not down through the inward/crossed mirror pose.
     "arms_raise": Drive({"ParamArmLA": 1.0, "ParamArmLB": 0.7,
                          "ParamArmRA": 1.0, "ParamArmRB": 0.7},
-                        note="both arms up — sleeves must ride their own arm, not the torso"),
+                        bidirectional=False,
+                        note="both arms lift outward together — sleeves must ride their own arm"),
     "arms_swing": Drive({"ParamArmLA": 1.0, "ParamArmRA": -1.0},
                         note="opposite phase — proves left and right are separate parts"),
-    # Opposite phase (proves the fused legs were cut at the crotch seam), but splaying the feet
-    # *outward* rather than inward — two close-together legs rotated toward each other cross into an X.
-    # Left leg swings to screen-left, right to screen-right: a widening stance, never a cross.
-    "legs_swing": Drive({"ParamLegLA": -1.0, "ParamLegLB": -0.6,
+    # Both legs to +max = splay OUTWARD (the limb convention is mirror-symmetric: +param lifts/splays
+    # each side away from the midline). Two close-together legs rotated toward each other would cross
+    # into an X, so this splays them to a widening stance and returns — never through the crossing pose.
+    "legs_swing": Drive({"ParamLegLA": 1.0, "ParamLegLB": 0.6,
                          "ParamLegRA": 1.0, "ParamLegRB": 0.6},
                         bidirectional=False,
-                        note="opposite phase, splayed out and back (never through the crossing pose) — "
+                        note="both legs splay outward and back (never through the crossing pose) — "
                              "proves the legs were cut at the crotch seam"),
 
     # --- face -------------------------------------------------------------------------------------

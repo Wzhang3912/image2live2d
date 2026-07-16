@@ -145,6 +145,37 @@ def test_limb_params_exempt_from_deform_cap():
     assert other.keyforms[0].mesh_offsets["x"][0][0] == pytest.approx(0.28)  # ordinary param clamped
 
 
+def test_limb_swing_is_mirror_symmetric():
+    """+param must lift each arm OUTWARD — away from the midline — on both sides, so driving both arms
+    to +max raises them symmetrically instead of lifting one and dropping the other. Before this, the
+    two arms rotated the same absolute direction, and you could not raise both at once."""
+    parts = [("torso", R.torso, (0.42, 0.45, 0.58, 0.70)),
+             ("arm_l", R.arm_l, (0.28, 0.40, 0.40, 0.72)),   # screen-left arm
+             ("arm_r", R.arm_r, (0.60, 0.40, 0.72, 0.72))]   # screen-right arm
+    layers, meshes = [], []
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=64, height=64))
+        meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=3))
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    params = author_rig(stack, meshes, select_template(stack), landmarks=None).parameters
+    by_id = {p.id: p for p in params}
+    mesh_by = {m.part_id: m for m in meshes}
+
+    def hand_dx(part_id: str, param: str) -> float:
+        """Mean x-shift of the arm's hand (its lowest row) when ``param`` is driven to +max."""
+        m = mesh_by[part_id]
+        bot = min(y for _, y in m.vertices)
+        kf = next(k for k in by_id[param].keyforms if k.value == by_id[param].max)
+        off = kf.mesh_offsets[part_id]
+        dxs = [off[i][0] for i, (_, y) in enumerate(m.vertices) if y <= bot + 0.02]
+        return sum(dxs) / len(dxs)
+
+    left = hand_dx("arm_l", "ParamArmLA")     # screen-left arm, its own +swing
+    right = hand_dx("arm_r", "ParamArmRA")    # screen-right arm, its own +swing
+    assert left < 0 and right > 0, (left, right)   # each hand swings OUTWARD, opposite directions
+
+
 def test_legs_swing_splays_the_feet_and_never_crosses():
     """The reported bug: two close-together legs swung in opposite phase rotate toward each other and
     cross into an X. The clip now splays them outward, and the swing is small enough that even the

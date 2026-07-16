@@ -107,6 +107,25 @@ def test_rig_json_export_for_live_runtime(tmp_path):
     assert all((layer.texture_path).exists() for layer, _ in parts)
 
 
+def test_rig_json_exports_playable_motion_clips(tmp_path):
+    """The /rig export carries the shipped motion clips so the live view can *play* them (not just its
+    own idle+cursor loop) — each lane is (param id, [[frame, value], ...]) the browser interpolates."""
+    from image2live2d import app
+
+    job = _wait(app.get_job(app.start_job(_layers_zip(tmp_path), "hero.zip")))
+    assert job.status == "done", job.error
+    rig = app.rig_json(job)
+    names = {a["name"] for a in rig["anims"]}
+    assert "idle" in names and "sweep" in names               # the loop + the every-param inspector
+    idle = next(a for a in rig["anims"] if a["name"] == "idle")
+    assert idle["loop"] and idle["fps"] > 0 and idle["length"] > 0
+    lane = idle["lanes"][0]
+    assert lane["p"] and all(len(kf) == 2 for kf in lane["k"])  # [frame, value] pairs
+    # every lane targets a real parameter of this rig
+    param_ids = {p["id"] for p in rig["params"]}
+    assert all(ln["p"] in param_ids for a in rig["anims"] for ln in a["lanes"])
+
+
 def test_async_job_flat_image_without_service_fails_at_decompose(tmp_path, monkeypatch):
     from image2live2d import app
 

@@ -105,11 +105,13 @@
     </div>
 
     <div class="card" id="previewcard" style="display:none">
-      <h2>4 · Live view <span class="hint">(in-browser runtime — animates on its own, follows your cursor, click to react)</span></h2>
+      <h2>4 · Live view <span class="hint">(in-browser runtime — plays the shipped motion clips, or follows your cursor)</span></h2>
       <div class="stage" id="stage"><canvas id="live"></canvas><span class="ph" id="liveph">loading runtime…</span></div>
       <div class="quick" id="quick">
+        <label class="hint" for="clipsel">Play clip:</label>
+        <select id="clipsel"><option value="">Live (idle + cursor)</option></select>
         <button id="toggleAuto">⏸ Pause idle</button>
-        <span class="hint" id="livehint">move your mouse over the character &middot; click for a reaction</span>
+        <span class="hint" id="livehint">pick a clip, or move your mouse over the character &middot; click for a reaction</span>
       </div>
     </div>
     <div class="card" id="cubismcard" style="display:none">
@@ -217,6 +219,7 @@ function onDone(j){
 // <canvas> with a per-triangle affine warp — the same math as the server preview, but real-time,
 // driven by an idle clock (blink/breath/sway) + cursor-follow + click reaction. No human tuning.
 let RIG=null, TEX=[], RAF=null, T0=null, AUTO=true, CLICK=-99, PHYS={}, LAST=null;
+let CLIP=null;   // {anim, t0} while a shipped motion clip is playing; null = live idle+cursor
 // perf: only the panel actually on-screen animates (both loops idle when scrolled away), and the
 // Canvas2D software rasterizer (card 4) is capped at 30fps — it does thousands of clip+drawImage
 // calls per frame, which Safari renders far slower than Chrome. See loop()/cubismLoop().
@@ -235,6 +238,7 @@ async function loadLive(){
   $('#previewcard').style.display='block';
   $('#cubismcard').style.display='block';
   const r=await fetch('/api/jobs/'+jobId+'/rig'); RIG=await r.json();
+  populateClips();
   TEX=await Promise.all(RIG.parts.map((_,i)=>new Promise(res=>{
     const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null);
     im.src='/api/jobs/'+jobId+'/tex/'+i;
@@ -278,7 +282,40 @@ function interp(p,value){
     if(!o[key]) o[key]=arr.map(z=>[z[0]*w,z[1]*w]); else arr.forEach((z,j)=>{o[key][j][0]+=z[0]*w;o[key][j][1]+=z[1]*w;});}
   return o;
 }
+// ---- shipped motion clips (idle + expressions + drive sheet + sweep) --------------------------
+// The same clips the .moc3 ships with. Picking one plays it here on the software renderer, so the
+// drive clips that exercise the physics (head_shake, body_sway, ...) can be *seen*, not just the
+// idle-plus-cursor loop. Physics still runs on top (simPhysics reads the clip's param values), so a
+// head_shake kicks the hair exactly as it would in the Viewer.
+function populateClips(){
+  const sel=$('#clipsel'); if(!sel||!RIG.anims) return;
+  while(sel.options.length>1) sel.remove(1);
+  for(const a of RIG.anims){
+    const o=document.createElement('option'); o.value=a.name;
+    o.textContent=a.name.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+    sel.appendChild(o);
+  }
+  sel.onchange=()=>{
+    const a=RIG.anims.find(x=>x.name===sel.value);
+    CLIP = a ? {a, t0:performance.now()/1000} : null;
+  };
+}
+function laneValue(k,frame){
+  if(!k.length) return 0;
+  if(frame<=k[0][0]) return k[0][1];
+  const last=k[k.length-1]; if(frame>=last[0]) return last[1];
+  for(let i=0;i<k.length-1;i++){ const a=k[i], b=k[i+1];
+    if(a[0]<=frame&&frame<=b[0]){ const u=b[0]!==a[0]?(frame-a[0])/(b[0]-a[0]):0; return a[1]+(b[1]-a[1])*u; } }
+  return last[1];
+}
+function clipSettings(){
+  const a=CLIP.a; let frame=(performance.now()/1000-CLIP.t0)*a.fps;
+  if(a.loop) frame%=a.length;
+  else if(frame>a.length){ CLIP=null; $('#clipsel').value=''; return null; }  // one-shot done -> live
+  const s={}; for(const lane of a.lanes) s[lane.p]=laneValue(lane.k,frame); return s;
+}
 function settingsAt(t){
+  if(CLIP){ const cs=clipSettings(); if(cs) return cs; }   // a picked clip drives everything it keys
   const s={};
   if(AUTO){
     if(has('ParamBreath')) s.ParamBreath=0.5+0.5*Math.sin(t*2*Math.PI/4.5);

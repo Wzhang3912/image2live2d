@@ -131,6 +131,7 @@ class _Job:
     meshes: object = None
     params: object = None
     physics: object = None
+    anims: object = None
     inp_bytes: bytes = b""
     source: bytes = b""
 
@@ -405,6 +406,7 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
 
     def s_animation():
         ctx["anims"] = motion.generate_all(ctx["auth"].parameters, ctx["physics"])
+        job.anims = ctx["anims"]
 
     def s_emit():
         rig = assemble_rig(
@@ -553,7 +555,16 @@ def rig_json(job: _Job) -> dict:
     groups = {"head": {"parts": head_i, "pivot": _pivot(set(head_i)), "rot": _rotmap(_HEAD_ROT)},
               "body": {"parts": body_i, "pivot": _pivot(set(head_i) | set(body_i)),
                        "rot": _rotmap(_BODY_ROT)}}
-    return {"nparts": len(parts), "parts": parts, "params": params, "physics": phys, "groups": groups}
+    # Motion clips (idle + expressions + drive sheet + sweep), so the live view can *play* the same
+    # motion the .moc3 ships with — the drive clips are the ones that exercise the physics, which the
+    # hand-coded idle-plus-cursor loop never did. Each lane is (param id, [[frame, value], ...]).
+    anims = [{"name": a.name, "fps": a.fps, "length": a.length, "loop": a.loop,
+              "lanes": [{"p": ln.param_id,
+                         "k": [[kf.frame, round(kf.value, 5)] for kf in ln.keyframes]}
+                        for ln in a.lanes]}
+             for a in (job.anims or [])]
+    return {"nparts": len(parts), "parts": parts, "params": params, "physics": phys,
+            "groups": groups, "anims": anims}
 
 
 def live2d_bundle_dir(job: "_Job") -> Path | None:

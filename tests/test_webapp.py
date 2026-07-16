@@ -107,6 +107,26 @@ def test_rig_json_export_for_live_runtime(tmp_path):
     assert all((layer.texture_path).exists() for layer, _ in parts)
 
 
+def test_web_job_matches_the_emitted_rig(tmp_path):
+    """The web preview must run the SAME pipeline as the .moc3/.inp deliverable — not a subset. It
+    once skipped synth + the limb/leg/z-order repairs, so the browser showed the pre-repair rig (22
+    parts vs 28) — bundled cardboard limbs, no mouth cavity. Pin parity: the web job's part/param/
+    physics counts equal rig_from_stack's for the same input."""
+    from image2live2d import app
+    from image2live2d.core import decompose
+    from image2live2d.pipeline import rig_from_stack
+    from image2live2d.samples import make_sample_layers
+
+    layer_dir = make_sample_layers(tmp_path / "src")
+    ref = rig_from_stack(decompose.from_layer_dir(layer_dir), name="ref")
+
+    job = _wait(app.get_job(app.start_job(_layers_zip(tmp_path), "hero.zip")))
+    assert job.status == "done", job.error
+    assert len(job.params) == len(ref.parameters)
+    assert len(job.physics) == len(ref.physics)
+    assert len(app.rig_json(job)["parts"]) == len(ref.parts)
+
+
 def test_rig_json_exports_playable_motion_clips(tmp_path):
     """The /rig export carries the shipped motion clips so the live view can *play* them (not just its
     own idle+cursor loop) — each lane is (param id, [[frame, value], ...]) the browser interpolates."""

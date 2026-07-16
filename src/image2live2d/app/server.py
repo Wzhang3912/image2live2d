@@ -325,11 +325,11 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
     """Execute the pipeline stage-by-stage, timing each and recording pass/fail. Caches artifacts so
     the preview/download endpoints can serve from this job."""
     from ..backends.nijilive import NijiliveEmitter
-    from ..core import decompose, mesh as meshmod, motion, physics
+    from ..core import decompose, motion, physics
     from ..core.assemble import assemble_rig
     from ..core.qa import evaluate
     from ..core.rig import author_rig, select_template
-    from ..pipeline import _lift_occluded_accessories, _safe_landmarks
+    from ..pipeline import _safe_landmarks, prepare_meshes
     from .. import preview
 
     ext = Path(filename).suffix.lower()
@@ -383,8 +383,9 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
         job.stack = ctx["stack"]
 
     def s_meshes():
-        ctx["meshes"] = meshmod.build_meshes(ctx["stack"])
-        _lift_occluded_accessories(ctx["stack"], ctx["meshes"])
+        # the full prepare phase (synth + repair), identical to the emitted rig — not a subset, or the
+        # browser preview drifts from the deliverable (bundled limbs, no mouth cavity, buried brows)
+        ctx["meshes"] = prepare_meshes(ctx["stack"])
         job.meshes = ctx["meshes"]
 
     def s_landmarks():

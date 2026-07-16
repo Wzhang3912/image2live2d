@@ -26,12 +26,7 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
     This is the headless entry point used once decomposition exists (real or synthetic), letting the
     whole spine run without standing up See-through.
     """
-    _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
-    meshes = mesh.build_meshes(stack)
-    split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
-    split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
-    _lift_occluded_accessories(stack, meshes)
-    normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
+    meshes = prepare_meshes(stack)
     template = select_template(stack)
     landmarks = _safe_landmarks(stack)
     authoring = author_rig(stack, meshes, template, landmarks=landmarks)
@@ -51,6 +46,24 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
         archetype=template.name,
         animations=anims,
     )
+
+
+def prepare_meshes(stack: LayerStack):
+    """Synthesize missing parts, build meshes, and repair the decomposer's output — the whole
+    stack-preparation phase, shared so the web preview renders the SAME rig the .moc3/.inp ships.
+
+    The web app used to re-implement a subset of this (build_meshes + lift only), so the browser
+    showed the pre-repair rig: bundled cardboard limbs, a mouth with no cavity, buried brows — 22
+    parts where the deliverable has 28. One helper, one order, no drift. Mutates ``stack``; returns
+    the meshes.
+    """
+    _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
+    meshes = mesh.build_meshes(stack)
+    split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
+    split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
+    _lift_occluded_accessories(stack, meshes)
+    normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
+    return meshes
 
 
 def build_rig(source: str | Path, *, name: str) -> Rig:

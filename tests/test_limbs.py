@@ -145,6 +145,63 @@ def test_limb_params_exempt_from_deform_cap():
     assert other.keyforms[0].mesh_offsets["x"][0][0] == pytest.approx(0.28)  # ordinary param clamped
 
 
+def test_legs_swing_splays_the_feet_and_never_crosses():
+    """The reported bug: two close-together legs swung in opposite phase rotate toward each other and
+    cross into an X. The clip now splays them outward, and the swing is small enough that even the
+    ping-pong's other extreme stays short of crossing. Property: the screen-left leg's foot never ends
+    up right of the screen-right leg's foot."""
+    from image2live2d.core.motion import generate_drives
+
+    # legs spaced like a real standing character (feet ~0.09 of canvas apart) — the reduced swing has
+    # to stay short of crossing even as the ping-pong swings them toward each other
+    parts = [("leg_l", R.leg_l, (0.42, 0.05, 0.48, 0.45)),
+             ("leg_r", R.leg_r, (0.52, 0.05, 0.58, 0.45))]
+    layers, meshes = [], []
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=64, height=64))
+        meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=3))
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    params = author_rig(stack, meshes, select_template(stack), landmarks=None).parameters
+    by_id = {p.id: p for p in params}
+    mesh_by = {m.part_id: m for m in meshes}
+
+    # the signed fraction the legs_swing clip drives each param to (its keyed extreme is full-range;
+    # the clip reaches |frac| of it, and the keyforms are linear from the default, so scale by |frac|)
+    pose = next(a for a in generate_drives(params) if a.name == "legs_swing")
+    fracs = {ln.param_id: max((kf.value for kf in ln.keyframes), key=abs) / 10.0 for ln in pose.lanes}
+
+    def foot_x(part_id: str, flip: float) -> float:
+        """Mean x of the part's lowest row (its foot) at the clip pose (flip=+1) or its opposite."""
+        m = mesh_by[part_id]
+        bot = min(y for _, y in m.vertices)
+        off = [0.0] * len(m.vertices)
+        for pid, frac in fracs.items():
+            p = by_id.get(pid)
+            if not p:
+                continue
+            val = p.max if frac * flip > 0 else p.min
+            kf = next((k for k in p.keyforms if k.value == val), None)
+            if kf and part_id in kf.mesh_offsets:
+                for i, (dx, _dy) in enumerate(kf.mesh_offsets[part_id]):
+                    off[i] += dx * abs(frac)                 # the clip reaches |frac| of the extreme
+        foot = [x + off[i] for i, (x, y) in enumerate(m.vertices) if y <= bot + 0.02]
+        return sum(foot) / len(foot)
+
+    def rest_foot_x(part_id: str) -> float:
+        m = mesh_by[part_id]
+        bot = min(y for _, y in m.vertices)
+        foot = [x for x, y in m.vertices if y <= bot + 0.02]
+        return sum(foot) / len(foot)
+
+    # the clip is one-directional (bidirectional=False): it reaches the splay pose and returns to
+    # neutral, never the mirror (inward) pose. So check the pose it actually visits.
+    l_splay, r_splay = foot_x("leg_l", 1.0), foot_x("leg_r", 1.0)
+    l_rest, r_rest = rest_foot_x("leg_l"), rest_foot_x("leg_r")
+    assert l_splay < r_splay, "feet crossed at the splay pose"                  # never an X
+    assert (r_splay - l_splay) > (r_rest - l_rest), "feet did not splay apart"  # widened, not narrowed
+
+
 def test_a_shoe_rides_the_leg_it_sits_under():
     """The second half of the leg-disconnect: a shoe is a separate part, so leg articulation used to
     move the leg and leave the shoe on the floor. A part at a limb's distal end now moves with it."""

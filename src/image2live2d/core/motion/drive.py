@@ -74,6 +74,11 @@ class Drive:
     hold: int = _HOLD             # frames held at each extreme
     settle: int = _SETTLE         # frames at neutral at the end, watching the physics come to rest
     note: str = ""                # what this clip is *for* — what you are supposed to be looking at
+    # Whether the swing reverses through the *opposite* pose or just returns to neutral. Most motions
+    # are symmetric (a head yaws both ways). But some are one-directional: legs splayed outward look
+    # like a stance, while the mirror pose swings them *inward* — two close-together legs then cross
+    # into an X. A one-directional drive splays out and comes back, never through the crossing pose.
+    bidirectional: bool = True
 
 
 # The sheet. Each clip isolates one axis of the rig so a defect is attributable: if the hair only fails
@@ -106,9 +111,14 @@ _DRIVES: dict[str, Drive] = {
                         note="both arms up — sleeves must ride their own arm, not the torso"),
     "arms_swing": Drive({"ParamArmLA": 1.0, "ParamArmRA": -1.0},
                         note="opposite phase — proves left and right are separate parts"),
-    "legs_swing": Drive({"ParamLegLA": 1.0, "ParamLegLB": 0.6,
-                         "ParamLegRA": -1.0, "ParamLegRB": -0.6},
-                        note="opposite phase — proves the fused legs were cut at the crotch seam"),
+    # Opposite phase (proves the fused legs were cut at the crotch seam), but splaying the feet
+    # *outward* rather than inward — two close-together legs rotated toward each other cross into an X.
+    # Left leg swings to screen-left, right to screen-right: a widening stance, never a cross.
+    "legs_swing": Drive({"ParamLegLA": -1.0, "ParamLegLB": -0.6,
+                         "ParamLegRA": 1.0, "ParamLegRB": 0.6},
+                        bidirectional=False,
+                        note="opposite phase, splayed out and back (never through the crossing pose) — "
+                             "proves the legs were cut at the crotch seam"),
 
     # --- face -------------------------------------------------------------------------------------
     "talk": Drive({"ParamMouthOpenY": 1.0}, cycles=3, hold=10, settle=20,
@@ -212,14 +222,17 @@ def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[Animati
 
     lanes = []
     for param, frac in present:
+        # a bidirectional clip reverses through the opposite pose; a one-directional one returns to
+        # neutral instead (0.0 -> param.default), so it never passes through the mirror pose
+        back = -frac if drive.bidirectional else 0.0
         frames = [(0, param.default)]
         for c in range(drive.cycles):
             base = c * cycle
             frames += [
                 (base + _SNAP, _at(param, frac)),
                 (base + _SNAP + drive.hold, _at(param, frac)),
-                (base + 2 * _SNAP + drive.hold, _at(param, -frac)),
-                (base + cycle, _at(param, -frac)),
+                (base + 2 * _SNAP + drive.hold, _at(param, back)),
+                (base + cycle, _at(param, back)),
             ]
         home = drive.cycles * cycle + _SNAP
         frames += [(home, param.default), (length, param.default)]

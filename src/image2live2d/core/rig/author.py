@@ -155,9 +155,13 @@ _DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more t
 #                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
 _BREATH_SHIFT = 0.012 # whole-character upward bob (model units) at breath 1
 _ARM_DEG = 14.0       # arm swing degrees about the shoulder joint at the extreme
-_LEG_DEG = 8.0        # leg swing degrees about the hip joint at the extreme
+# Legs are close together (feet only ~0.08 of canvas apart), so a swing that would look fine on an arm
+# converges the two feet past each other into a cross. A leg on a standing character barely moves
+# anyway. Keep the swing small enough that opposite-phase legs stay short of crossing: 2*len*sin(deg)
+# has to stay under the foot gap, which at ~0.4 leg length means well under ~6deg.
+_LEG_DEG = 5.0        # leg swing degrees about the hip joint at the extreme
 _ELBOW_DEG = 32.0     # forearm bend about the elbow at the extreme (lower segment ramps in)
-_KNEE_DEG = 26.0      # lower-leg bend about the knee at the extreme
+_KNEE_DEG = 16.0      # lower-leg bend about the knee at the extreme (also swings the foot laterally)
 _LIMB_BEND_BAND = 0.35  # fraction of the lower segment over which the bend ramps 0->full (a soft,
 #                         gap-free fold at the joint rather than a hard crease on the continuous mesh)
 

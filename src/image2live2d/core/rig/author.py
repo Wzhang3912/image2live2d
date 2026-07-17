@@ -329,6 +329,12 @@ def author_rig(
                              SemanticRole.leg_l, SemanticRole.leg_r})
     all_limb_candidates = [(layer.id, mesh_by_part[layer.id]) for layer in stack.layers
                            if layer.id in mesh_by_part and layer.semantic_role not in _LIMB_ROLES]
+    # The character's horizontal midline — the reference for "outward". A limb rotates the SAME absolute
+    # direction for a given param sign, so without mirroring, driving both arms to +max lifts one and
+    # drops the other: you literally cannot raise both arms at once. Negating the rotation for the limb
+    # on the far side of the midline makes +param mean "lift/splay OUTWARD" on both sides — a body that
+    # moves symmetrically, the way a real one does.
+    _mid_x = _union_center(list(mesh_by_part.values()))[0] if mesh_by_part else 0.5
     for role, swing_id, bend_id, swing_deg, bend_deg in (
         (SemanticRole.arm_l, "ParamArmLA", "ParamArmLB", _ARM_DEG, _ELBOW_DEG),
         (SemanticRole.arm_r, "ParamArmRA", "ParamArmRB", _ARM_DEG, _ELBOW_DEG),
@@ -346,8 +352,9 @@ def author_rig(
         riders = _limb_riders([m for _, m in limb], all_limb_candidates)
         limb = limb + riders
         joint, elbow, end = _limb_joints([m for _, m in members(role)])      # joint from the limb only
-        params.append(_rotation(swing_id, limb, joint, deg=swing_deg))       # whole-limb swing
-        params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg))   # lower-segment bend
+        side = 1.0 if joint[0] >= _mid_x else -1.0    # +param lifts/splays OUTWARD on both sides
+        params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side))       # whole-limb swing
+        params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg * side))   # lower-segment bend
 
     # --- Breath (subtle whole-character bob) ----------------------------------------------------
     all_parts = [

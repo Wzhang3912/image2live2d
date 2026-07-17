@@ -11,7 +11,7 @@ import math
 from dataclasses import dataclass, field
 
 from ..motion import MIN_SWING_FRAC
-from ...irr.schema import Parameter, Rig, Vec2
+from ...irr.schema import Parameter, Rig, SemanticRole, Vec2
 from ...irr.validate import Issue, Severity, lint
 
 # A deformed vertex shifting more than this (model-space units, canvas ~= 1.0 wide) almost
@@ -169,11 +169,94 @@ def motion_issues(rig: Rig) -> list[Issue]:
     return issues
 
 
-def check(rig: Rig) -> list[Issue]:
-    """Full static QA pass: structural lint + numeric param sweep + motion coverage. Render-based
-    artifact detection (tearing/holes via the nijilive runtime) is added in Phase 2.
+# A front-facing character's face has features on BOTH sides. If every face feature sits on one side and
+# the other side is entirely empty, it is a profile view or a mis-decomposition — either way this rig
+# can't drive both sides (blink one eye, turn a half-face), so warn. Judged by SIDE, not pair-by-pair:
+# a character may carry a single combined eyelash (one eye_l) yet split its eye-whites L/R, so it is
+# bilateral even though the eye_l/eye_r pair alone looks one-sided. Only the case where a whole side is
+# empty is a red flag. Needs this many side-features present before judging, so a minimal fixture with
+# one feature isn't condemned; the one real scene input had 5 on one side and 0 on the other.
+_MIN_FACE_SIDE_FEATURES = 3
+# Sum of part bounding-box areas over the union bbox area. A single figure's parts tile its silhouette
+# with modest overlap (real characters measured 0.8-1.8, elaborate outfits included); a scene packs many
+# overlapping objects (a bar scene with furniture + duplicated fragments measured 4.2). Well clear of any
+# real character, so this flags "too much overlapping stuff to be one figure" without catching busy ones.
+_CLUTTER_FILL_WARN = 3.0
+
+# L/R face-feature roles that a front-facing character carries on both sides.
+_FACE_PAIRS = (
+    (SemanticRole.eye_l, SemanticRole.eye_r),
+    (SemanticRole.eye_white_l, SemanticRole.eye_white_r),
+    (SemanticRole.eyebrow_l, SemanticRole.eyebrow_r),
+    (SemanticRole.pupil_l, SemanticRole.pupil_r),
+    (SemanticRole.ear_l, SemanticRole.ear_r),
+)
+
+
+def plausibility_issues(rig: Rig) -> list[Issue]:
+    """Is the input a single front-facing character this pipeline can actually rig?
+
+    The rig math assumes one bilateral, front-facing figure — split limbs L/R, blink both eyes, turn a
+    head that has two sides. Fed something else (a profile crop, or a whole *scene* — a decomposition of
+    a girl-at-a-bar-table came through as 17 parts with a one-sided face and furniture fragments), the
+    pipeline does not crash: it emits a rig whose motion is nonsense (a head-turn that barely moves, a
+    blink with one eye). These checks flag that up front instead of shipping a confident-looking dud.
+    They are warnings, not a hard stop — a rig is still produced; the caller decides what to do with it.
     """
-    return [*lint(rig), *sweep_report(rig).issues, *motion_issues(rig)]
+    roles = [p.semantic_role for p in rig.parts]
+    role_set = set(roles)
+    issues: list[Issue] = []
+
+    if SemanticRole.face_base not in role_set:
+        issues.append(Issue(Severity.warning, "no_face",
+                            "no face detected among the parts — this may not be a riggable character "
+                            "(the head turn, blink and gaze rig have nothing to attach to)"))
+
+    left = [lr[0] for lr in _FACE_PAIRS if lr[0] in role_set]
+    right = [lr[1] for lr in _FACE_PAIRS if lr[1] in role_set]
+    if len(left) + len(right) >= _MIN_FACE_SIDE_FEATURES and (not left or not right):
+        have, empty = ("left", "right") if left else ("right", "left")
+        issues.append(Issue(Severity.warning, "one_sided_face",
+                            f"every face feature is on the {have} ({len(left) + len(right)} features, "
+                            f"none on the {empty}) — a profile view or a mis-decomposition, which the "
+                            "front-facing rig can't drive on both sides"))
+
+    fill = _clutter_fill(rig)
+    if fill >= _CLUTTER_FILL_WARN:
+        issues.append(Issue(Severity.warning, "cluttered_input",
+                            f"parts overlap far more than a single figure would (fill {fill:.1f}x the "
+                            "silhouette) — the input may be a scene or contain more than one subject"))
+    return issues
+
+
+def _clutter_fill(rig: Rig) -> float:
+    """Sum of part bounding-box areas divided by their union bbox area."""
+    boxes = []
+    for part in rig.parts:
+        m = rig.mesh_for(part.id)
+        if not m or not m.vertices:
+            continue
+        xs = [v[0] for v in m.vertices]
+        ys = [v[1] for v in m.vertices]
+        boxes.append((min(xs), min(ys), max(xs), max(ys)))
+    if not boxes:
+        return 0.0
+    ux0 = min(b[0] for b in boxes)
+    uy0 = min(b[1] for b in boxes)
+    ux1 = max(b[2] for b in boxes)
+    uy1 = max(b[3] for b in boxes)
+    union = (ux1 - ux0) * (uy1 - uy0)
+    if union <= 1e-9:
+        return 0.0
+    return sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes) / union
+
+
+def check(rig: Rig) -> list[Issue]:
+    """Full static QA pass: structural lint + numeric param sweep + motion coverage + input
+    plausibility. Render-based artifact detection (tearing/holes via the nijilive runtime) is added
+    in Phase 2.
+    """
+    return [*lint(rig), *sweep_report(rig).issues, *motion_issues(rig), *plausibility_issues(rig)]
 
 
 # --------------------------------------------------------------------------------------------------
@@ -191,11 +274,12 @@ class RigReport:
     sweep: SweepReport
     landmark_warnings: list[str] = field(default_factory=list)
     motion_warnings: list[Issue] = field(default_factory=list)
+    plausibility_warnings: list[Issue] = field(default_factory=list)
 
     @property
     def passed(self) -> bool:
         return (self.sweep.passed and not self.lint_warnings and not self.landmark_warnings
-                and not self.motion_warnings)
+                and not self.motion_warnings and not self.plausibility_warnings)
 
     @property
     def reasons(self) -> list[str]:
@@ -203,6 +287,7 @@ class RigReport:
         out += [f"sweep:{i.code}" for i in self.sweep.issues if i.severity is Severity.warning]
         out += [f"landmark:{c}" for c in self.landmark_warnings]
         out += [f"motion:{i.code}" for i in self.motion_warnings]
+        out += [f"input:{i.code}" for i in self.plausibility_warnings]
         return out
 
 
@@ -255,6 +340,7 @@ def evaluate(
         sweep=sweep_report(rig, steps=steps),
         landmark_warnings=list(landmark_warnings or []),
         motion_warnings=motion_issues(rig),
+        plausibility_warnings=plausibility_issues(rig),
     )
 
 

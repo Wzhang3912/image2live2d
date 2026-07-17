@@ -239,23 +239,16 @@ def author_rig(
     head_acc = [(pid, m) for pid, m in accessories if graph.parent_of(pid) == HEAD]
     body_acc = [(pid, m) for pid, m in accessories if graph.parent_of(pid) == BODY]
 
-    # --- Head turn (shared spherical warp) & tilt (rotation) ------------------------------------
+    # --- Head turn & tilt (ParamAngleX/Y/Z) -----------------------------------------------------
+    # Emitted as keyform scaffolds only. Each backend synthesises the head turn from the group it owns
+    # (the Live2D emitter warps the head group about its own computed neck-base pivot; nijilive rotates
+    # the head group node) and discards any baked head offsets — so there is nothing to size a sphere
+    # for here. See _head_turn_scaffold. Body turn below is different and DOES bake offsets.
     head = members(*_HEAD_ROLES) + head_acc
     if head:
-        head_meshes = [m for _, m in head]
-        # Pivot on the real face-oval center when we have it (landmark-corrected turn), but ALWAYS
-        # size the sphere to the head union bbox so it contains every head vertex (hair extends well
-        # beyond the face oval; _head_turn's radius is center-relative over this bbox).
-        bbox = _union_bbox(head_meshes)
-        center = lm.face_oval.center if lm.face_oval else _union_center(head_meshes)
-        # No neck follow-through deform: the head is emitted as a **rotation node about its own bottom
-        # pivot** (~the neck junction), so the head swivels *about* the neck and the junction stays put.
-        # The old tapered follow-through was for the flat model where the head turned by deforming (the
-        # neck had to chase the deformed chin); under node rotation it chases a chin the head no longer
-        # occupies and flings the neck top off-screen at pitch/turn extremes. Let the neck stay anchored.
-        params.append(_head_turn("ParamAngleX", head, center, bbox, axis="x", amax=_YAW_MAX))
-        params.append(_head_turn("ParamAngleY", head, center, bbox, axis="y", amax=_PITCH_MAX))
-        params.append(_rotation("ParamAngleZ", head, center, deg=_ANGLE_Z_DEG))
+        params.append(_head_turn_scaffold("ParamAngleX"))
+        params.append(_head_turn_scaffold("ParamAngleY"))
+        params.append(_head_turn_scaffold("ParamAngleZ"))
 
     # --- Pupil look -----------------------------------------------------------------------------
     # Landmark-corrected: bound travel by the real eye size so pupils stay within the eye.
@@ -412,6 +405,27 @@ def _tri(param_id: str, at) -> Parameter:
         Keyform(value=p.default, mesh_offsets=at(0.0)),
         Keyform(value=p.max, mesh_offsets=at(1.0)),
     ]
+    return p
+
+
+def _head_turn_scaffold(param_id: str) -> Parameter:
+    """The HEAD turn/tilt (ParamAngleX/Y/Z) as a keyform SCAFFOLD — key values only, no baked per-vertex
+    offsets.
+
+    Both shipping backends synthesise the head turn themselves and **discard** any baked head offsets:
+    the Live2D emitter drives a warp-deformer grid over the head group (``moc3_emit`` ``turn_ids``,
+    which strips ParamAngle* from the head meshes' bindings), and nijilive rotates the head GROUP NODE
+    (``puppet`` ``_HEAD_ROT``, which excludes the head parts from deform bindings). So the old sphere
+    warp we baked here (``_head_turn``/``_rotation``) was **dead code for head parts** — offsets nothing
+    read, inviting someone to tune a function that can't move the output. (Verified: emitting with vs
+    without these offsets yields byte-identical .moc3 and .inp.)
+
+    Body turn is deliberately NOT scaffolded: the Live2D emitter does not warp the body, so the .moc3's
+    body sway/lean still consumes the baked ParamBodyAngle* offsets — those stay on ``_head_turn`` /
+    ``_rotation``.
+    """
+    p = make_parameter(param_id)
+    p.keyforms = [Keyform(value=p.min), Keyform(value=p.default), Keyform(value=p.max)]
     return p
 
 

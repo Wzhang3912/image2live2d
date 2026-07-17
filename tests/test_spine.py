@@ -162,16 +162,18 @@ def test_mouth_open_is_a_lens_cavity():
     assert abs(deltas[centre]) > abs(deltas[corner])
 
 
-def test_head_turn_is_a_coherent_warp():
+def test_head_turn_is_delegated_to_the_backend_not_baked():
+    # The head turn used to be baked as per-vertex face_base offsets here. It is now synthesised by each
+    # backend (Live2D warp grid / nijilive group-node rotation) from head-group membership, so the IRR
+    # carries only the keyform SCAFFOLD — the parameter and its key values, with no offsets. Baking a
+    # sphere warp here as well would double-apply the turn. (That the emitted warp really turns the face
+    # — a coherent per-vertex warp, not a uniform slide — is pinned by tests/test_head_turn.py, which
+    # drives the actual grid.)
     rig = _authored_rig()
-    right = deform_at(rig, "ParamAngleX", 30.0)
-    rest = rig.mesh_for("face_base").vertices
-    dxs = [nx - rx for (nx, _), (rx, _) in zip(right["face_base"], rest)]
-    # a true warp varies per vertex across the part (a uniform translate would give identical dx)
-    assert max(dxs) - min(dxs) > 1e-3
-    # rest pose at value 0 is identity
-    at_rest = deform_at(rig, "ParamAngleX", 0.0)
-    assert at_rest["face_base"] == [tuple(v) for v in rest]
+    ax = next(p for p in rig.parameters if p.id == "ParamAngleX")
+    assert [k.value for k in ax.keyforms] == [ax.min, ax.default, ax.max]   # scaffold present
+    assert not any(kf.mesh_offsets for kf in ax.keyforms)                   # no baked per-vertex turn
+    assert deform_at(rig, "ParamAngleX", 30.0) == {}                        # nothing deformed at IRR level
 
 
 def test_mouth_form_raises_corners_on_smile():

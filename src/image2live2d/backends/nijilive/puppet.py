@@ -20,6 +20,7 @@ import zlib
 from dataclasses import dataclass
 from pathlib import Path
 
+from ...core.structure.graph import HEAD_ROLES as _HEAD_ROLES
 from ...irr.schema import Mesh, Parameter, Part, Rig, SemanticRole
 
 NO_TEXTURE = 4294967295  # uint.max — empty texture slot / thumbnail sentinel
@@ -421,12 +422,7 @@ def _simple_physics_node(uuid: int, output_param_uuid: int, ph) -> dict:
 # Head-group hierarchy — parent the head parts under one node and drive its rotation, so the whole
 # head (face + hair + eyes + ...) moves as ONE rigid unit instead of each part slipping on its own.
 # --------------------------------------------------------------------------------------------------
-_HEAD_ROLES = frozenset({
-    SemanticRole.face_base, SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back,
-    SemanticRole.eyebrow_l, SemanticRole.eyebrow_r, SemanticRole.eye_l, SemanticRole.eye_r,
-    SemanticRole.eye_white_l, SemanticRole.eye_white_r, SemanticRole.pupil_l, SemanticRole.pupil_r,
-    SemanticRole.nose, SemanticRole.mouth, SemanticRole.ear_l, SemanticRole.ear_r, SemanticRole.blush,
-})
+# _HEAD_ROLES is imported from core.structure.graph at the top of the module (single source of truth).
 
 # Head-turn params -> which node-rotation channel drives the head group, and the head rotation (rad)
 # at the param's extreme. inochi2d applies rot.y/rot.x as a pseudo-3D horizontal/vertical squash

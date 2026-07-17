@@ -170,3 +170,35 @@ def test_a_mouth_already_drawn_open_is_left_alone(tmp_path):
     stack = decompose.from_layer_dir(d)
     assert synthesize_mouth_cavity(stack) is None
     assert not stack.by_role(R.mouth_cavity)
+
+
+def test_mouth_cavity_joins_the_head_group_so_it_turns_with_the_head():
+    """The synthesised cavity sits behind the lips and must turn with the head exactly as they do — the
+    head turn is delivered by head-GROUP membership (the Live2D warp grid / nijilive group rotation),
+    not per-part offsets. A stale local ``_HEAD_ROLES`` in the emitter once omitted ``mouth_cavity``, so
+    the cavity was left out of the head group and drifted from the mouth on a turn (followed it only
+    ~2% on yaw). Pin both the single source of truth and the end-to-end membership."""
+    from image2live2d.backends.nijilive import puppet
+    from image2live2d.core.structure.graph import HEAD_ROLES
+
+    # the emitter's head-role set must not drift from the canonical one (it once did, silently)
+    assert puppet._HEAD_ROLES == HEAD_ROLES
+    assert R.mouth_cavity in puppet._HEAD_ROLES
+
+    # end to end: a rig whose mouth is a bare stroke gets a synthesised cavity, and it lands in the head
+    # group alongside the lips it hides behind
+    from image2live2d.core import decompose
+    from image2live2d.pipeline import rig_from_stack
+    from image2live2d.samples import make_sample_layers
+
+    import pathlib
+    tmp = pathlib.Path(__import__("tempfile").mkdtemp())
+    rig = rig_from_stack(decompose.from_layer_dir(make_sample_layers(tmp / "src")), name="c")
+    cavity = [p for p in rig.parts if p.semantic_role is R.mouth_cavity]
+    if not cavity:
+        pytest.skip("sample produced no synthesised cavity")
+    drawn = [(p, rig.mesh_for(p.id)) for p in rig.parts]
+    head_ids = puppet.head_group_ids(drawn)
+    mouth = next(p for p in rig.parts if p.semantic_role is R.mouth)
+    assert mouth.id in head_ids                            # the lips turn with the head
+    assert cavity[0].id in head_ids                        # ...and so must the cavity behind them

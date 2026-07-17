@@ -60,15 +60,22 @@ def test_author_gives_each_accessory_a_sway_param():
 
 
 def test_accessory_still_follows_the_turn():
-    # regression: adding sway must not remove the rigid turn-follow the accessory already had.
+    # regression: adding sway must not remove the rigid turn-follow the accessory already had. The head
+    # turn is delivered by each backend from head-GROUP membership (Live2D warp grid / nijilive group
+    # rotation), not by baked IRR offsets — so the ornament follows the head iff it joins the head
+    # group. The body sway is still baked per-vertex, so that half is unchanged.
+    from image2live2d.backends.nijilive.puppet import head_group_ids
+
     stack, meshes = _scene()
     params = {p.id: p for p in author_rig(stack, meshes, select_template(stack)).parameters}
+    mesh_by = {m.part_id: m for m in meshes}
+    head_ids = head_group_ids([(L, mesh_by[L.id]) for L in stack.layers if L.id in mesh_by])
 
     def moved_by(param_id, part_id):
         return any(any(dx or dy for dx, dy in kf.mesh_offsets.get(part_id, []))
                    for kf in params[param_id].keyforms)
 
-    assert moved_by("ParamAngleX", "bow")                # head ornament still turns with the head
+    assert "bow" in head_ids                             # head ornament turns with the head group
     assert moved_by("ParamBodyAngleX", "belt")           # waist charm still sways with the body
 
 

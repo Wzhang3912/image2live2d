@@ -172,23 +172,33 @@ def test_lift_accessory_above_occluding_hair():
 
 
 def test_head_accessory_follows_head_turn_body_accessory_follows_body():
-    """A head ornament must move with ParamAngleX (head turn); a waist accessory must not — it moves
-    with ParamBodyAngleX instead. Regression for the 'detached bow': head accessories had no head-turn
-    keyform, so they floated in place while the head turned away (caught by the deformation preview)."""
+    """A head ornament must move with the head turn; a waist accessory must not — it moves with the
+    body instead. Regression for the 'detached bow': a head accessory that floats in place while the
+    head turns away (caught by the deformation preview).
+
+    The head turn is delivered by each backend from head-GROUP membership (Live2D warp grid / nijilive
+    group-node rotation), so a head part follows the turn iff it joins the head group — that is where
+    this property now lives, not in baked ParamAngleX offsets. The body sway is still baked per-vertex.
+    """
+    from image2live2d.backends.nijilive.puppet import head_group_ids
+
     parts = [("face_base", R.face_base, (0.20, 0.50, 0.80, 0.95)),
              ("bow", R.accessory, (0.40, 0.92, 0.60, 0.99)),     # on top of the head
              ("torso", R.torso, (0.30, 0.20, 0.70, 0.55)),
              ("belt", R.accessory, (0.40, 0.20, 0.60, 0.30))]    # at the waist
     stack, meshes = _stack(parts)
     auth = author_rig(stack, meshes, select_template(stack))
+    mesh_by = {m.part_id: m for m in meshes}
+    head_ids = head_group_ids([(L, mesh_by[L.id]) for L in stack.layers if L.id in mesh_by])
 
     def moved_by(param_id, part_id):
         p = next(p for p in auth.parameters if p.id == param_id)
         return any(any(dx or dy for dx, dy in kf.mesh_offsets.get(part_id, [])) for kf in p.keyforms)
 
-    assert moved_by("ParamAngleX", "bow")            # head ornament turns with the head
-    assert not moved_by("ParamAngleX", "belt")       # waist accessory does not
-    assert moved_by("ParamBodyAngleX", "belt")       # ...it follows the body instead
+    assert "bow" in head_ids                         # head ornament turns with the head group
+    assert "belt" not in head_ids                    # waist accessory does not join the head
+    assert moved_by("ParamBodyAngleX", "belt")       # ...it follows the body instead (baked offsets)
+    assert not moved_by("ParamAngleX", "bow")        # and the head turn is delegated, not baked
 
 
 def test_non_overlapping_accessory_not_lifted():

@@ -238,6 +238,7 @@ async function loadLive(){
   $('#previewcard').style.display='block';
   $('#cubismcard').style.display='block';
   const r=await fetch('/api/jobs/'+jobId+'/rig'); RIG=await r.json();
+  markNeutralKeyforms();
   populateClips();
   TEX=await Promise.all(RIG.parts.map((_,i)=>new Promise(res=>{
     const im=new Image(); im.onload=()=>res(im); im.onerror=()=>res(null);
@@ -376,9 +377,24 @@ function simPhysics(s,dt){
     s[r.output]=st.pos;
   }
 }
+// A param is only safe to skip when its DEFAULT keyform deforms nothing. Two params here fail that:
+// the eye (default 1, min 0 -> the *closed* lid is the 0 keyform) and the mouth (default 0, whose 0
+// keyform is what squashes the cavity shut). Precompute it rather than assuming 0 == neutral.
+function markNeutralKeyforms(){
+  for(const p of RIG.params){
+    const o=interp(p,p.default); let zero=true;
+    for(const k in o){ for(const d of o[k]) if(Math.abs(d[0])>1e-9||Math.abs(d[1])>1e-9){zero=false;break;}
+      if(!zero) break; }
+    p._neutralZero=zero;
+  }
+}
 function accum(s){
   const acc={};
-  for(const p of RIG.params){const v=s[p.id]; if(v===undefined||v===0) continue;
+  // Cubism semantics: every param ALWAYS has a value — its default when nothing drives it — and its
+  // keyform always evaluates. Skipping undriven params left the mouth cavity un-collapsed at rest,
+  // and skipping v===0 killed the closed eye outright (blink was a no-op in this view for both).
+  for(const p of RIG.params){const v=s[p.id]===undefined?p.default:s[p.id];
+    if(v===p.default&&p._neutralZero) continue;                      // genuinely nothing to add
     const skip = HTURN[p.id]?HEADSET : (BTURN[p.id]?BODYSET : null);  // group-turn moves via rotation
     const o=interp(p,v); for(const k in o){ if(skip&&skip.has(+k)) continue; const a=o[k];
       if(!acc[k]) acc[k]=a.map(z=>[z[0],z[1]]); else a.forEach((z,j)=>{acc[k][j][0]+=z[0];acc[k][j][1]+=z[1];});}}

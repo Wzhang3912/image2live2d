@@ -626,7 +626,15 @@ _L2D_CTYPES = {".json": "application/json", ".moc3": "application/octet-stream",
 # HTTP layer
 # --------------------------------------------------------------------------------------------------
 
-_PAGE = (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
+def _page() -> str:
+    """Read the page off disk per request, rather than caching it at import.
+
+    Caching it meant every index.html edit kept serving stale JS until someone restarted the server —
+    so a *fixed* runtime still rendered the bug, and the obvious reading ("the fix didn't work") was
+    wrong. That cost real debugging time chasing a blink fix that had in fact already landed. This is
+    a local single-user tool: one small read per page load is free next to being lied to.
+    """
+    return (Path(__file__).parent / "index.html").read_text(encoding="utf-8")
 
 
 def _make_handler():
@@ -646,7 +654,7 @@ def _make_handler():
             u = urlparse(self.path)
             path = u.path
             if path in ("/", "/index.html"):
-                page = _PAGE.replace("__DECOMPOSE_READY__", "true" if _flat_decompose_available() else "false")
+                page = _page().replace("__DECOMPOSE_READY__", "true" if _flat_decompose_available() else "false")
                 self._send(200, page.encode(), "text/html; charset=utf-8")
                 return
             if path == "/favicon.ico":

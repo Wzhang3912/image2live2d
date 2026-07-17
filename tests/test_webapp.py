@@ -179,3 +179,20 @@ def test_managed_gpu_starts_and_always_releases(tmp_path, monkeypatch):
     assert job.steps[0].name == "Start GPU" and job.steps[0].status == "ok"
     assert fake.acq == 1 and fake.rel == 1          # acquired once, released once (guaranteed)
     assert job.status == "error"                     # (decompose failed, as expected without a GPU)
+
+
+def test_page_edits_are_served_without_a_restart(tmp_path, monkeypatch):
+    """index.html used to be slurped into a module global at import, so every UI edit kept serving
+    stale JS until someone restarted the server — a fixed runtime still rendered the bug, and the
+    obvious reading ("my fix didn't work") was wrong. Pin that the page is read per request."""
+    from image2live2d.app import server as srv
+
+    real = srv.Path(srv.__file__).parent / "index.html"
+    original = real.read_text(encoding="utf-8")
+    try:
+        before = srv._page()
+        real.write_text(original + "\n<!-- edited while running -->\n", encoding="utf-8")
+        assert "edited while running" in srv._page(), "page is cached — UI edits need a restart"
+        assert "edited while running" not in before
+    finally:
+        real.write_text(original, encoding="utf-8")

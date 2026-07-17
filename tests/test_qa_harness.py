@@ -81,3 +81,73 @@ def test_landmark_warnings_fold_into_gate():
     bad = evaluate(rig, "x", landmark_warnings=["pupil_outside_eye:eye_l"])
     assert not bad.passed
     assert "landmark:pupil_outside_eye:eye_l" in bad.reasons
+
+
+# --- input plausibility gate (character vs profile/scene) ------------------------------------------
+from image2live2d.core.qa.harness import plausibility_issues  # noqa: E402
+
+
+def _codes(rig):
+    return {i.code for i in plausibility_issues(rig)}
+
+
+def test_bilateral_character_is_plausible():
+    """A normal front-facing face (both eyes) raises no input warning."""
+    assert _codes(_build(_GOOD)) == set()
+
+
+def test_one_sided_face_is_flagged():
+    """A face whose features are ALL on one side (nothing on the other) is a profile view or a
+    mis-decomposition — the front-facing rig can't drive both sides. This is the shape a decomposed
+    scene (a girl-at-a-bar-table) came through as."""
+    parts = [("face_base", R.face_base, (0.2, 0.1, 0.8, 0.9)),
+             ("eye_l", R.eye_l, (0.30, 0.55, 0.45, 0.63)),
+             ("eye_white_l", R.eye_white_l, (0.30, 0.55, 0.45, 0.63)),
+             ("eyebrow_l", R.eyebrow_l, (0.30, 0.64, 0.45, 0.68))]     # 3 left features, 0 right
+    assert "one_sided_face" in _codes(_build(parts))
+
+
+def test_combined_eyelash_with_split_whites_is_still_bilateral():
+    """Not every one-sided PAIR means a one-sided face: See-through emits a single combined eyelash
+    (one eye_l) while splitting the whites L/R, so the face has features on both sides and must NOT be
+    flagged — judged by side, not pair-by-pair."""
+    parts = [("face_base", R.face_base, (0.2, 0.1, 0.8, 0.9)),
+             ("eye_l", R.eye_l, (0.30, 0.55, 0.45, 0.63)),             # combined eyelash -> left only
+             ("eye_white_l", R.eye_white_l, (0.30, 0.55, 0.45, 0.63)),
+             ("eye_white_r", R.eye_white_r, (0.55, 0.55, 0.70, 0.63)),  # right side present via white
+             ("mouth", R.mouth, (0.42, 0.30, 0.58, 0.38))]
+    assert "one_sided_face" not in _codes(_build(parts))
+
+
+def test_no_face_is_flagged():
+    """Nothing face-like among the parts -> the head-turn/blink/gaze rig has nothing to attach to."""
+    parts = [("hair_front", R.hair_front, (0.2, 0.6, 0.8, 0.95)),
+             ("clothing", R.clothing, (0.3, 0.1, 0.7, 0.55))]
+    assert "no_face" in _codes(_build(parts))
+
+
+def test_cluttered_input_is_flagged():
+    """Parts overlapping far more than a single figure (many full-canvas layers stacked) reads as a
+    scene / multiple subjects, not one character."""
+    full = (0.0, 0.0, 1.0, 1.0)
+    parts = [("face_base", R.face_base, full),
+             ("eye_l", R.eye_l, full), ("eye_r", R.eye_r, full),
+             ("clothing", R.clothing, full), ("accessory", R.accessory, full),
+             ("hair_front", R.hair_front, full)]                        # 6 full-canvas parts -> fill ~6x
+    codes = _codes(_build(parts))
+    assert "cluttered_input" in codes
+    assert "one_sided_face" not in codes                               # bilateral -> only clutter fires
+
+
+def test_flagged_input_still_produces_a_rig():
+    """Graceful degradation: the gate WARNS, it does not block. A flagged input still emits a full rig;
+    QA just reports passed=False with the reason, so the caller (and the web UI) can decide."""
+    parts = [("face_base", R.face_base, (0.2, 0.1, 0.8, 0.9)),
+             ("eye_l", R.eye_l, (0.30, 0.55, 0.45, 0.63)),
+             ("eye_white_l", R.eye_white_l, (0.30, 0.55, 0.45, 0.63)),
+             ("eyebrow_l", R.eyebrow_l, (0.30, 0.64, 0.45, 0.68))]
+    rig = _build(parts)
+    assert len(rig.parts) == 4                                          # rig still built, not blocked
+    report = evaluate(rig, "one_sided")
+    assert not report.passed
+    assert any(r.startswith("input:") for r in report.reasons)

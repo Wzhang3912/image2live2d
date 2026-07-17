@@ -418,8 +418,17 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         # Earlier we translated the head, which dragged the pinned neck into a rubber stretch and pulled the
         # lower hair with it. Squash-about-pivot keeps the whole head (hair included) turning in place.
         _hair = {_SR.hair_front, _SR.hair_side, _SR.hair_back, _SR.accessory}
+        _fxs = [v[0] for p, m in _dm if p.id in head_ids and p.semantic_role not in _hair for v in m.vertices]
         _fys = [v[1] for p, m in _dm if p.id in head_ids and p.semantic_role not in _hair for v in m.vertices]
         _fref = sum(_fys) / len(_fys) if _fys else 0.5
+        # The head BALL (face parts only — long hair would inflate it): centre + radius of the sphere the
+        # turn happens on. Used to recover each grid point's DEPTH, which is what a turn needs and a
+        # squash lacks. Falls back to the head-group bbox when there are no face parts.
+        if _fxs and _fys:
+            _sx, _sy = (min(_fxs) + max(_fxs)) / 2.0, (min(_fys) + max(_fys)) / 2.0
+            _srad = max((max(_fxs) - min(_fxs)) / 2.0, 1e-6)
+        else:
+            _sx = _sy = _srad = None
         _bys = [v[1] for p, m in _dm if p.id not in head_ids and p.id not in neck_ids for v in m.vertices]
         _bref = sum(_bys) / len(_bys) if _bys else _fref + 1.0
         _dir = 1.0 if _bref >= _fref else -1.0                          # +1 if body is at larger y
@@ -464,14 +473,29 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 pitch = fr.get("ParamAngleY", 0.0) * HEAD_PITCH
                 roll = fr.get("ParamAngleZ", 0.0) * HEAD_ROLL
                 cyaw, cpit = math.cos(yaw), math.cos(pitch)             # pseudo-3D squash factors
+                syaw, spit = math.sin(yaw), math.sin(pitch)
                 cr, sr = math.cos(roll), math.sin(roll)
                 grid = []
                 for (px_, py_) in rest:
-                    # squash toward the pivot (x by cos(yaw), y by cos(pitch)) then roll about the pivot —
-                    # a pure scale+rotation about the neck base: the head turns in place, size scales
-                    # symmetrically (reads as depth), and the neck-side stays put. NO translation.
-                    dx = (px_ - _pivot[0]) * cyaw
-                    dy = (py_ - _pivot[1]) * cpit
+                    # A point at depth z rotating about the head axis moves x' = x·cos(a) + z·sin(a).
+                    # We had the cos term and not the sin one, which is a pure horizontal SCALE — so the
+                    # two eyes drifted APART toward the centre line instead of sweeping together, and a
+                    # full ±30° yaw read as the face getting narrower (2.8% of model width, vs 17% for
+                    # roll). Recover z from the head ball and add the missing term.
+                    #
+                    # This also anchors the neck for free, which is why translating used to stretch it:
+                    # the neck junction sits at the ball's bottom pole where z≈0, so it gets no sweep on
+                    # its own, while the face (z≈radius) gets the full one. No taper needed — the sphere
+                    # already says where the head is deep and where it is edge-on.
+                    if _srad is None:
+                        z = 0.0
+                    else:
+                        _r2 = _srad * _srad - (px_ - _sx) ** 2 - (py_ - _sy) ** 2
+                        z = math.sqrt(_r2) if _r2 > 0.0 else 0.0        # 0 outside the ball (hair, edges)
+                    tx = _sx + (px_ - _sx) * cyaw + z * syaw
+                    ty = _sy + (py_ - _sy) * cpit + z * spit
+                    dx = tx - _pivot[0]
+                    dy = ty - _pivot[1]
                     rx = _pivot[0] + dx * cr - dy * sr
                     ry = _pivot[1] + dx * sr + dy * cr
                     grid.append(to_moc(rx, ry))

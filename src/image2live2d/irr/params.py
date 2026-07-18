@@ -80,8 +80,12 @@ LIMB_PARAM_IDS: tuple[str, ...] = tuple(s[0] for s in _LIMB_PARAM_SPECS)
 #  * extra skirt interior zones (P3b): ``ParamSkirtC1``, ``ParamSkirtC2`` … on a wide hem (L/C/R stay
 #    in the catalog above; only the extra interior lobes are minted).
 _DYNAMIC_PARAM_RE = re.compile(
-    r"^(?:ParamHair(?:Front|Side|Back)\d+|ParamAcc\d+|ParamCloth\d+|ParamSkirtC\d+)$"
+    r"^(?:ParamHair(?:Front|Side|Back)(?:\d+|\d*V)|ParamAcc\d+|ParamCloth\d+|ParamSkirtC\d+)$"
 )
+# ...V ids (ParamHairFrontV, ParamHairSideV, ParamHairBackV) are the per-role VERTICAL hair-bounce
+# outputs — a nod drops the hair straight down through physics, which the horizontal sway params can't
+# express. One per hair role, driven by ParamAngleY (pitch) fed as an Angle input. See
+# core.rig.author._hair_bounce and core.physics.generate.
 
 
 def make_parameter(param_id: str) -> Parameter:

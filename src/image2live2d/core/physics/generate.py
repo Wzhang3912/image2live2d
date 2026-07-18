@@ -12,13 +12,21 @@ from __future__ import annotations
 from ..structure.appendages import accessory_appendages, garment_appendages
 from ..structure.graph import build_rig_graph
 from ..structure.skirt import skirt_specs_from_params, skirt_zones
-from ..structure.strands import hair_specs_from_params, hair_strands
+from ..structure.strands import HAIR_BASE_TUNING, hair_specs_from_params, hair_strands
 from ..types import LayerStack
-from ...irr.schema import Mesh, Parameter, PhysicsModel, PhysicsRig
+from ...irr.schema import Mesh, Parameter, PhysicsModel, PhysicsRig, SemanticRole
 
 # Per-strand hair tuning (base values + geometry scaling) now lives in core.structure.strands so
 # author_rig and this stage agree on the strand param ids. Back hair is heavier/slower, front fringe
 # lighter/snappier: higher mass -> more lag behind the head, lower drag -> longer follow-through.
+# Per-role vertical hair-bounce output params (see core.rig.author._hair_bounce). Kept here so the
+# physics stage and the authoring stage agree on the ids without a cross-import.
+_HAIR_BOUNCE_OUT = {
+    SemanticRole.hair_front: "ParamHairFrontV",
+    SemanticRole.hair_side: "ParamHairSideV",
+    SemanticRole.hair_back: "ParamHairBackV",
+}
+
 _HEAD_DRIVER = "ParamAngleX"  # head turn drives hair sway
 
 _BODY_DRIVER = "ParamBodyAngleX"
@@ -45,10 +53,11 @@ def generate_physics(
     rigs: list[PhysicsRig] = []
 
     if _HEAD_DRIVER in param_ids:
-        # Hair reacts to the WHOLE head turn: yaw (X, primary) + pitch (Y) + roll (Z). The emitter
-        # maps pitch to vertical anchor motion so a nod bobs the hair, not just a side sway. One
-        # pendulum per strand (P2) so twin-tails / fringe swing independently.
-        head_extra = [d for d in ("ParamAngleY", "ParamAngleZ") if d in param_ids]
+        # Horizontal sway reacts to the head turn: yaw (X, primary) + roll (Z, tips gravity). Pitch is
+        # NOT an extra driver here — a "Y" input is inert for this angle output (it slides the anchor
+        # down its own string), so it only ever bloated the setting; the nod bob is a separate vertical
+        # chain below. One pendulum per strand (P2) so twin-tails / fringe swing independently.
+        head_extra = [d for d in ("ParamAngleZ",) if d in param_ids]
         specs = (hair_strands(stack, meshes) if meshes is not None
                  else hair_specs_from_params(param_ids))
         for s in specs:
@@ -56,6 +65,17 @@ def generate_physics(
                 rigs.append(PhysicsRig(id=f"phys_{s.param_id}", driver_param=_HEAD_DRIVER,
                                        output_param=s.param_id, extra_drivers=head_extra,
                                        mass=s.mass, drag=s.drag, length=s.length))
+
+        # Vertical bounce: one pendulum per hair ROLE, driven by pitch. ParamAngleY tips the strand's
+        # gravity (pitch_angle=True -> emitted as an Angle input), so a nod swings it and it settles,
+        # driving the role's ParamHair*V output straight down. This is the motion the horizontal sway
+        # chains structurally cannot produce. Role tuning matches the sway strands (back heavy/slow).
+        for role, (base, (mass, drag, length)) in HAIR_BASE_TUNING.items():
+            out = _HAIR_BOUNCE_OUT[role]
+            if out in param_ids and "ParamAngleY" in param_ids:
+                rigs.append(PhysicsRig(id=f"phys_{out}", driver_param="ParamAngleY",
+                                       output_param=out, pitch_angle=True,
+                                       mass=mass, drag=drag, length=length))
 
     # Skirt zones: primary driver = body sway (fall back to head turn if no body param at all). Material
     # is geometry-scaled when meshes are threaded through (a longer/wider garment swings bigger/slower),

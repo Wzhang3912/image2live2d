@@ -432,12 +432,18 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         _bys = [v[1] for p, m in _dm if p.id not in head_ids and p.id not in neck_ids for v in m.vertices]
         _bref = sum(_bys) / len(_bys) if _bys else _fref + 1.0
         _dir = 1.0 if _bref >= _fref else -1.0                          # +1 if body is at larger y
-        # Pivot = the head group's base toward the body (where head meets neck), matching preview's
-        # head_pivot. Squash/roll about it leaves the neck-side of the head fixed.
+        # Pivot = the base of the FACE toward the body (the neck junction). Computed from face parts,
+        # NOT the whole head group: floor-length hair (a gown veil, drill-curls to the feet) drags the
+        # head-group bbox all the way down, so a group-based pivot sits at the hair TIP near the feet.
+        # The yaw/pitch SQUASH is about the face-ball centre (_sx) so it survived that, but the ROLL is a
+        # rotation about THIS pivot — and rotating the head about a point by its feet slides it clean off
+        # the neck (seen at the roll extreme on floor-length-hair characters). The neck is the base of the
+        # FACE, which long hair can't move. Fall back to the head group only when there are no face parts.
         _hxs = [v[0] for p, m in _dm if p.id in head_ids for v in m.vertices]
         _hys = [v[1] for p, m in _dm if p.id in head_ids for v in m.vertices]
-        _pivot = (sum(_hxs) / len(_hxs) if _hxs else 0.5,
-                  (max(_hys) if _dir > 0 else min(_hys)) if _hys else 0.5)
+        _pys = _fys if _fys else _hys
+        _pivot = (_sx if _sx is not None else (sum(_hxs) / len(_hxs) if _hxs else 0.5),
+                  (max(_pys) if _dir > 0 else min(_pys)) if _pys else 0.5)
         _kp = [sorted(kf.value for kf in pmap[pid].keyforms) for pid in turn_ids]
         _tot = 1
         for _k in _kp:

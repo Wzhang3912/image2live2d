@@ -177,11 +177,12 @@ def motion_issues(rig: Rig) -> list[Issue]:
 # empty is a red flag. Needs this many side-features present before judging, so a minimal fixture with
 # one feature isn't condemned; the one real scene input had 5 on one side and 0 on the other.
 _MIN_FACE_SIDE_FEATURES = 3
-# Sum of part bounding-box areas over the union bbox area. A single figure's parts tile its silhouette
-# with modest overlap (real characters measured 0.8-1.8, elaborate outfits included); a scene packs many
-# overlapping objects (a bar scene with furniture + duplicated fragments measured 4.2). Well clear of any
-# real character, so this flags "too much overlapping stuff to be one figure" without catching busy ones.
-_CLUTTER_FILL_WARN = 3.0
+# NOTE: a "cluttered_input" fill-ratio signal (Σ part-bbox area / union-bbox area) was tried and
+# REMOVED. It flagged the one scene input at 4.2×, but running seven diverse characters through it
+# showed elaborate legitimate ones measure *higher* — a floor-length gown at 4.4×, huge drill-curls at
+# 7.3× — so no threshold separates a scene from an ornate character; the signal only false-flagged busy
+# outfits. The scene is still caught by `one_sided_face` (it was 5-features-on-one-side). Don't
+# reintroduce fill-ratio without a signal that actually discriminates.
 
 # L/R face-feature roles that a front-facing character carries on both sides.
 _FACE_PAIRS = (
@@ -221,34 +222,7 @@ def plausibility_issues(rig: Rig) -> list[Issue]:
                             f"none on the {empty}) — a profile view or a mis-decomposition, which the "
                             "front-facing rig can't drive on both sides"))
 
-    fill = _clutter_fill(rig)
-    if fill >= _CLUTTER_FILL_WARN:
-        issues.append(Issue(Severity.warning, "cluttered_input",
-                            f"parts overlap far more than a single figure would (fill {fill:.1f}x the "
-                            "silhouette) — the input may be a scene or contain more than one subject"))
     return issues
-
-
-def _clutter_fill(rig: Rig) -> float:
-    """Sum of part bounding-box areas divided by their union bbox area."""
-    boxes = []
-    for part in rig.parts:
-        m = rig.mesh_for(part.id)
-        if not m or not m.vertices:
-            continue
-        xs = [v[0] for v in m.vertices]
-        ys = [v[1] for v in m.vertices]
-        boxes.append((min(xs), min(ys), max(xs), max(ys)))
-    if not boxes:
-        return 0.0
-    ux0 = min(b[0] for b in boxes)
-    uy0 = min(b[1] for b in boxes)
-    ux1 = max(b[2] for b in boxes)
-    uy1 = max(b[3] for b in boxes)
-    union = (ux1 - ux0) * (uy1 - uy0)
-    if union <= 1e-9:
-        return 0.0
-    return sum((b[2] - b[0]) * (b[3] - b[1]) for b in boxes) / union
 
 
 def check(rig: Rig) -> list[Issue]:

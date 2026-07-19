@@ -172,6 +172,35 @@ def test_a_mouth_already_drawn_open_is_left_alone(tmp_path):
     assert not stack.by_role(R.mouth_cavity)
 
 
+def test_faint_full_canvas_scatter_does_not_suppress_the_cavity(tmp_path):
+    """A See-through mouth layer carries a near-transparent halo (alpha 8-63) dusted across the whole
+    canvas. PIL's raw getbbox() — anything > 0 — then returned the ENTIRE canvas, so a thin closed lip
+    line read as a full-canvas square (aspect 1.0), tripped the 'already drawn open' skip, and the
+    cavity was never painted (the mouth could not open — seen on the silverdress character). The
+    solid-mass bbox must ignore the sprinkle so a closed mouth still gets its interior."""
+    from PIL import Image, ImageDraw
+
+    d = tmp_path / "layers"
+    d.mkdir()
+    face = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(face).rectangle([30, 20, 98, 110], fill=(250, 220, 205, 255))
+    face.save(d / "00_face_base.png")
+
+    lips = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(lips).rectangle([56, 84, 76, 87], fill=(150, 70, 80, 255))  # a 20x3 closed stroke
+    # dust a faint halo (alpha 40) into the far corners — the decomposer scatter that broke getbbox
+    px = lips.load()
+    for x, y in ((2, 2), (125, 2), (2, 125), (125, 125), (64, 3), (3, 64)):
+        px[x, y] = (150, 70, 80, 40)
+    assert lips.getbbox() == (2, 2, 126, 126)              # raw getbbox is fooled: near-full canvas
+    lips.save(d / "20_mouth.png")
+
+    stack = decompose.from_layer_dir(d)
+    layer = synthesize_mouth_cavity(stack)
+    assert layer is not None                                # the scatter must NOT suppress the cavity
+    assert stack.by_role(R.mouth_cavity)
+
+
 def test_mouth_cavity_joins_the_head_group_so_it_turns_with_the_head():
     """The synthesised cavity sits behind the lips and must turn with the head exactly as they do — the
     head turn is delivered by head-GROUP membership (the Live2D warp grid / nijilive group rotation),

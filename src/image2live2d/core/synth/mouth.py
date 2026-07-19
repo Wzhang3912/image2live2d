@@ -124,6 +124,23 @@ def _paint_interior(size, box, palette) -> "object":
     return big.resize(size, Image.BOX)
 
 
+def _alpha_bbox_solid(img) -> tuple[int, int, int, int] | None:
+    """Scatter-robust replacement for ``Image.getbbox()`` on a decomposer layer.
+
+    Returns ``(x0, y0, x1, y1)`` with ``x1``/``y1`` **exclusive** (getbbox convention), or ``None`` if
+    the layer is empty. Delegates to the mesh builder's solid-mass bbox so the faint full-canvas halo
+    can't inflate the box (see PR #47)."""
+    from ..mesh.build import alpha_bbox, DEFAULT_ALPHA_THRESHOLD
+
+    px = img.getchannel("A").load()
+    w, h = img.size
+    box = alpha_bbox(lambda x, y: px[x, y], w, h, DEFAULT_ALPHA_THRESHOLD)
+    if box is None:
+        return None
+    x0, y0, x1, y1 = box                                   # alpha_bbox is inclusive
+    return x0, y0, x1 + 1, y1 + 1                           # -> exclusive, matching getbbox
+
+
 def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     """Paint an inner mouth behind the lips and splice it into ``stack``. Returns the new layer, or
     ``None`` if there is nothing to do.
@@ -145,7 +162,12 @@ def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     if not src.is_file():
         return None
     img = Image.open(src).convert("RGBA")
-    box = img.getbbox()                                    # tight alpha bounds of the lip line
+    # A See-through mouth layer carries a near-transparent halo dusted across the whole canvas (measured
+    # alpha 8-63), so PIL's raw getbbox() — anything > 0 — returned the ENTIRE 1280x1280 canvas. A
+    # full-canvas box reads as aspect 1.0, tripping the "already drawn open" skip below, so the cavity was
+    # never painted and the mouth could not open (seen on the silverdress test character). Use the same
+    # solid-mass-weighted bbox the mesh builder uses (PR #47) so the faint sprinkle can't inflate the box.
+    box = _alpha_bbox_solid(img)
     if box is None:
         return None
     x0, y0, x1, y1 = box

@@ -126,17 +126,17 @@ def test_no_face_is_flagged():
     assert "no_face" in _codes(_build(parts))
 
 
-def test_cluttered_input_is_flagged():
-    """Parts overlapping far more than a single figure (many full-canvas layers stacked) reads as a
-    scene / multiple subjects, not one character."""
+def test_elaborate_bilateral_character_is_not_flagged():
+    """An ornate character (many heavily-overlapping clothing/hair layers) must NOT be flagged. A
+    fill-ratio "cluttered" signal was tried and removed: running seven diverse characters showed
+    elaborate legitimate ones (a floor-length gown, huge drill-curls) overlap *more* than the one scene
+    it was meant to catch, so the ratio can't discriminate. Bilateral + has-a-face is enough here."""
     full = (0.0, 0.0, 1.0, 1.0)
     parts = [("face_base", R.face_base, full),
              ("eye_l", R.eye_l, full), ("eye_r", R.eye_r, full),
              ("clothing", R.clothing, full), ("accessory", R.accessory, full),
-             ("hair_front", R.hair_front, full)]                        # 6 full-canvas parts -> fill ~6x
-    codes = _codes(_build(parts))
-    assert "cluttered_input" in codes
-    assert "one_sided_face" not in codes                               # bilateral -> only clutter fires
+             ("hair_front", R.hair_front, full), ("hair_back", R.hair_back, full)]  # heavy overlap
+    assert _codes(_build(parts)) == set()                             # not flagged as a scene
 
 
 def test_flagged_input_still_produces_a_rig():

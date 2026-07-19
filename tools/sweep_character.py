@@ -102,15 +102,16 @@ def main() -> int:
             if any(k in line for k in ("Hair", "Cloth", "Acc", "swings", "FROZEN", "output")):
                 print(f"[{clip}] {line.strip()}", flush=True)
 
-    # QA gate + coverage
+    # QA gate + coverage + capability report (what the puppet can/can't do)
     print("\n=== QA ===", flush=True)
     qa = subprocess.run([sys.executable, "-c",
         "from image2live2d.core import decompose;from image2live2d.pipeline import rig_from_stack;"
-        "from image2live2d.core.qa.harness import evaluate;from pathlib import Path;"
+        "from image2live2d.core.qa.harness import evaluate;"
+        "from image2live2d.core.qa.capability import rig_capabilities;from pathlib import Path;"
         f"rig=rig_from_stack(decompose.from_layer_dir(Path('{layer_dir}')),name='c');"
         "rep=evaluate(rig,'c');"
-        "print('parts',len(rig.parts),'params',len(rig.parameters),'physics',len(rig.physics));"
-        "print('passed',rep.passed,'reasons',rep.reasons)"],
+        "print('passed',rep.passed,'reasons',rep.reasons);"
+        "print('\\n=== CAPABILITY ===');print(rig_capabilities(rig).format())"],
         capture_output=True, text=True, env={"PYTHONPATH": src, "PATH": __import__("os").environ["PATH"]})
     print(qa.stdout.strip() or qa.stderr[-800:], flush=True)
     return 0

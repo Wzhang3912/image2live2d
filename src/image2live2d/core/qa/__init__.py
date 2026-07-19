@@ -5,6 +5,7 @@ Implementation lives in :mod:`.harness`; this package re-exports its public API.
 
 from __future__ import annotations
 
+from .capability import Capability, CapabilityReport, rig_capabilities
 from .harness import (
     batch,
     BatchReport,
@@ -22,12 +23,15 @@ from .harness import (
 __all__ = [
     "batch",
     "BatchReport",
+    "Capability",
+    "CapabilityReport",
     "check",
     "deform_at",
     "evaluate",
     "MAX_DISPLACEMENT",
     "ParamSweep",
     "plan_sweeps",
+    "rig_capabilities",
     "RigReport",
     "sweep_report",
     "SweepReport",

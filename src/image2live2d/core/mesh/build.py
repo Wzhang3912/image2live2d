@@ -34,6 +34,10 @@ AlphaSampler = Callable[[float, float], int]
 DEFAULT_GRID = 14  # finer lattice -> smoother deformation + tighter coverage of thin features
 #                    (hair strands, ankles), fewer seams under motion than the old 10x10
 DEFAULT_ALPHA_THRESHOLD = 8  # below this a texel counts as transparent
+_BBOX_MASS_FRAC = 0.02       # a row/col with < this fraction of the peak line's solid-alpha mass is
+#                              scatter, not content, and is trimmed from the bbox ends (see alpha_bbox)
+_BBOX_SOLID_ALPHA = 64       # only texels this opaque count toward the bbox mass — the faint decomposer
+#                              halo (alpha ~8-63) is excluded so it can't inflate the box
 DEFAULT_CELL_SAMPLES = 3  # NxN probe points per cell when testing coverage
 
 # uv rect = (u0, v0, u1, v1): u0/u1 = left/right, v0/v1 = top/bottom (v down).
@@ -131,20 +135,57 @@ def alpha_bbox(
 ) -> tuple[int, int, int, int] | None:
     """Pixel bounding box ``(px0, py0, px1, py1)`` (inclusive) of texels >= ``threshold``.
 
-    Returns ``None`` if every texel is below threshold.
+    Robust to **sparse faint scatter**: some decomposer (See-through) layers carry a thin halo of
+    near-transparent pixels flung to the canvas corners. A raw min/max bbox then spans the whole canvas
+    even though the real content is a tight blob — which, for a *face* layer, wrecks the head-turn pivot
+    (the head detaches and floats off on a turn, measured on two of eight test characters). So a row or
+    column is only counted toward the box if its total alpha *mass* is a real fraction of the median
+    row/column mass; the scatter's is a rounding error, so it is trimmed from each end. A clean part's
+    edges carry substantial mass, so its box is unchanged. Returns ``None`` if every texel is transparent.
     """
-    px0 = py0 = None
-    px1 = py1 = 0
+    # Mass counts only reasonably-SOLID texels. The scatter halo is near-transparent (measured alpha
+    # 8-63 on a See-through mouth layer), while real content — even a thin lip stroke — is opaque
+    # (>=~128). Weighting the box by solid mass makes the faint sprinkle contribute a rounding error no
+    # matter how many lines it dusts, so it trims cleanly; a mass floor alone missed a scatter band
+    # dense enough to clear it. Cells still include everything >= `threshold`, so soft edges stay in the
+    # mesh SHAPE — only the box extent ignores the faint stuff.
+    solid = max(threshold, _BBOX_SOLID_ALPHA)
+    col_mass = [0] * width
+    row_mass = [0] * height
+    solid_total = 0
+    any_texel = False
     for py in range(height):
         for px in range(width):
-            if sample(px, py) >= threshold:
-                if px0 is None:
-                    px0, py0, px1, py1 = px, py, px, py
-                else:
-                    px0, px1 = min(px0, px), max(px1, px)
-                    py0, py1 = min(py0, py), max(py1, py)
-    if px0 is None:
+            a = sample(px, py)
+            if a >= threshold:
+                any_texel = True
+            if a >= solid:
+                col_mass[px] += a
+                row_mass[py] += a
+                solid_total += a
+    if not any_texel:
         return None
+    if solid_total == 0:                          # a genuinely faint part (soft glow) — keep raw extent
+        col_mass = [1 if any(sample(px, py) >= threshold for py in range(height)) else 0
+                    for px in range(width)]
+        row_mass = [1 if any(sample(px, py) >= threshold for px in range(width)) else 0
+                    for py in range(height)]
+
+    def _span(mass: list[int], n: int) -> tuple[int, int]:
+        # Reference the PEAK line, not the median: when the scatter dusts more lines than the content
+        # occupies (a full-canvas sprinkle vs a small face), the median line is itself scatter, so a
+        # median-relative floor trims nothing. The content's peak line always dwarfs the scatter.
+        floor = max(mass) * _BBOX_MASS_FRAC       # below this a line is scatter, not content
+        lo = 0
+        while lo < n and mass[lo] < floor:
+            lo += 1
+        hi = n - 1
+        while hi > lo and mass[hi] < floor:
+            hi -= 1
+        return lo, hi
+
+    px0, px1 = _span(col_mass, width)
+    py0, py1 = _span(row_mass, height)
     return px0, py0, px1, py1
 
 

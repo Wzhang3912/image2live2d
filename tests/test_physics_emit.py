@@ -37,17 +37,26 @@ def test_simplephysics_node_emitted_and_wired():
     build = build_puppet(_hair_rig())
     children = build.puppet["nodes"]["children"]
     anchors = [c for c in children if c["type"] == "Node" and c["name"].startswith("physics_anchor")]
-    assert len(anchors) == 1
+    # Two anchors: the head-turn anchor drives the horizontal sway, and a separate ParamAngleY anchor
+    # drives the vertical nod-bounce (its anchor moves on t.y). They are grouped by driver set.
+    assert len(anchors) == 2
+    param_by_name = {p["name"]: p for p in build.puppet["param"]}
 
-    phys_nodes = anchors[0]["children"]
-    assert phys_nodes and all(n["type"] == "SimplePhysics" for n in phys_nodes)
-    sp = phys_nodes[0]
+    def sp_for(output_name):
+        want = param_by_name[output_name]["uuid"]
+        for a in anchors:
+            for n in a["children"]:
+                if n["type"] == "SimplePhysics" and n["param"] == want:
+                    return a, n
+        raise AssertionError(f"no SimplePhysics drives {output_name}")
+
+    sway_anchor, sp = sp_for("ParamHairFront")
     assert sp["model_type"] == "Pendulum" and sp["map_mode"] == "AngleLength"
     assert sp["length"] > 0 and len(sp["output_scale"]) == 2
+    assert "ParamAngleY" not in sway_anchor["name"]                 # sway is not pitch-driven
 
-    # SimplePhysics.param resolves to the ParamHairFront output parameter's uuid
-    param_by_name = {p["name"]: p for p in build.puppet["param"]}
-    assert sp["param"] == param_by_name["ParamHairFront"]["uuid"]
+    bounce_anchor, _ = sp_for("ParamHairFrontV")                    # the nod-bounce exists...
+    assert "ParamAngleY" in bounce_anchor["name"]                  # ...and its anchor is pitch-driven
 
 
 def test_driver_param_has_transform_binding_to_anchor():

@@ -219,6 +219,12 @@ class PhysicsRig(BaseModel):
     driver_param: str
     output_param: str
     extra_drivers: list[str] = Field(default_factory=list)
+    pitch_angle: bool = False
+    """When set, ``ParamAngleY`` (pitch) drives this pendulum as an **Angle** input — a nod tips the
+    strand's gravity, so it swings and settles. Used for the vertical hair-bounce chains: a pitch fed as
+    a "Y" translation is a mathematical no-op for an angle output (it slides the anchor down its own
+    string), so a nod could never bob the hair; tipping gravity is what actually moves it. Off for the
+    horizontal sway chains, where pitch is genuinely inert and is dropped."""
     model: PhysicsModel = PhysicsModel.pendulum
     mass: float = 1.0
     drag: float = 0.2

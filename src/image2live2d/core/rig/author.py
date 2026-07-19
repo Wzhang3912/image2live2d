@@ -117,6 +117,9 @@ _HAIR_SWAY = 0.12     # hair-tip swing as fraction of strand length at +-1 (root
 #                       ~10% of its own length. We were at 22% — twice a real rig — which swept the fringe
 #                       far enough across the head to bare the hairline. Gentle, so hair reads as attached
 #                       to the head rather than flying off it.
+_HAIR_BOUNCE = 0.10   # hair-tip VERTICAL drop as fraction of strand length at +-1 (roots stay). A nod's
+#                       secondary bob; slightly gentler than the horizontal sway so a nod reads as a
+#                       settle, not a lurch. Driven by pitch through physics (see _hair_bounce).
 _ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways subtly off its mount)
 _GARMENT_SWAY = 0.20  # cape/sleeve dangle: between an ornament and a skirt hem (a bigger sheet of cloth)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
@@ -272,9 +275,22 @@ def author_rig(
     # P2: one param per hair PART (strand), not one per role — so twin-tails / a ponytail + fringe
     # each swing on their own param (and their own pendulum). A single part of a role keeps the base
     # id, so single-strand characters are unchanged. See core.structure.strands.hair_strands.
-    for spec in hair_strands(stack, meshes):
+    strands = hair_strands(stack, meshes)
+    for spec in strands:
         params.append(_hair_sway(spec.param_id, spec.part_id,
                                  mesh_by_part[spec.part_id], spec.vertex_indices))
+
+    # --- Hair BOUNCE (vertical), one param per hair ROLE (physics OUTPUT) ------------------------
+    # The sway params above are horizontal-only, so a nod never bobs the hair through physics — it only
+    # rides the head-turn deformation, which reads stiff. A vertical bounce param per role, driven by
+    # pitch, lets the hair drop and settle on a nod. Per ROLE, not per strand (unlike sway): on a nod
+    # every lobe of a role drops together, so the twin-tail welding that forced per-strand sway does not
+    # apply — and it keeps this to at most three extra params (front/side/back). generate_physics wires
+    # each to a ParamAngleY pendulum.
+    for role in (SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back):
+        role_strands = [s for s in strands if s.role is role]
+        if role_strands:
+            params.append(_hair_bounce(_hair_bounce_param(role), role_strands, mesh_by_part))
 
     # --- Cloth/skirt hem sway, L/C/R zones (physics OUTPUT params) -------------------------------
     # Which clothing is a swingable hem, and each zone's overlapping window, come from the shared
@@ -644,6 +660,44 @@ def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | Non
             depth = (top - y) / length                  # 0 at the root, 1 at the tip
             cell[vi] = (sign * amount * length * depth ** _SWAY_TAPER, 0.0)
         return {part_id: cell}
+
+    return _tri(param_id, at)
+
+
+_HAIR_BOUNCE_PARAM = {
+    SemanticRole.hair_front: "ParamHairFrontV",
+    SemanticRole.hair_side: "ParamHairSideV",
+    SemanticRole.hair_back: "ParamHairBackV",
+}
+
+
+def _hair_bounce_param(role: SemanticRole) -> str:
+    return _HAIR_BOUNCE_PARAM[role]
+
+
+def _hair_bounce(param_id: str, strands, mesh_by_part, *, amount: float = _HAIR_BOUNCE) -> Parameter:
+    """Per-role VERTICAL hair-bounce OUTPUT param: on a nod the tips drop straight down and settle,
+    roots (top) stay. The sibling of ``_hair_sway`` on the Y axis — same tip-weighted taper, but the
+    offset is ``(0, dy)`` instead of ``(dx, 0)`` — so pitch physics can bob the hair, which a horizontal
+    sway param cannot express. Covers every strand of the role in one param (a nod drops them together).
+
+    +1 drops the tips (−y is down in this y-up model); the pendulum drives it both ways, so the sign is
+    only a convention. Each strand droops from its *own* top, using its owned vertices when the part is a
+    shared multi-lobe mesh."""
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        cells: dict[str, list[Vec2]] = {}
+        for spec in strands:
+            mesh = mesh_by_part[spec.part_id]
+            verts = mesh.vertices
+            owned = range(len(verts)) if spec.vertex_indices is None else spec.vertex_indices
+            _, bottom, _, top = _bbox([verts[i] for i in owned])
+            length = max(top - bottom, 1e-6)
+            cell = cells.setdefault(spec.part_id, [(0.0, 0.0)] * len(verts))
+            for vi in owned:
+                _, y = verts[vi]
+                depth = (top - y) / length                 # 0 at the root, 1 at the tip
+                cell[vi] = (0.0, -sign * amount * length * depth ** _SWAY_TAPER)
+        return cells
 
     return _tri(param_id, at)
 

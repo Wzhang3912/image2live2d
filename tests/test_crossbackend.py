@@ -86,12 +86,22 @@ def test_physics_pairs_match_across_backends():
 
     assert niji == irr                 # nijilive expresses every driver the IRR records
     assert irr                         # non-empty (hair + skirt zones)
-    # Cubism expresses all of them except pitch, and drops nothing else
-    expressible = {out: {d for d in drivers if not d.endswith("Y")} for out, drivers in irr.items()}
+    # Cubism drops pitch as a NO-OP for the horizontal sway chains (a "Y" input can't move an angle
+    # output), but KEEPS it — as an Angle input tipping gravity — for the vertical bounce chains
+    # (pitch_angle=True), the one way a nod moves a down-hanging strand. So "expressible" is per-chain.
+    expressible = {}
+    for ph in rig.physics:
+        drivers = set(ph.all_drivers())
+        expressible[ph.output_param] = drivers if ph.pitch_angle else {d for d in drivers if not d.endswith("Y")}
     assert live2d == expressible
-    assert any(d.endswith("Y") for drivers in irr.values() for d in drivers), (
-        "fixture no longer has a pitch driver — this test is no longer checking anything"
-    )
+    bounce = [ph for ph in rig.physics if ph.pitch_angle]
+    assert bounce, "fixture has no vertical bounce chain — this test is no longer checking pitch"
+    assert all("ParamAngleY" in expressible[ph.output_param] for ph in bounce)   # pitch kept for bounce
+    # and Cubism types that kept pitch as an Angle input (not the inert Y that never moved the hair)
+    by_out = {s["Output"][0]["Destination"]["Id"]: s for s in physics3(rig)["PhysicsSettings"]}
+    for ph in bounce:
+        types = {i["Source"]["Id"]: i["Type"] for i in by_out[ph.output_param]["Input"]}
+        assert types["ParamAngleY"] == "Angle"
     # skirt zones are multi-driven (body sway + lean) — "all lower body affects the skirt"
     assert any(len(d) > 1 for d in irr.values())
 

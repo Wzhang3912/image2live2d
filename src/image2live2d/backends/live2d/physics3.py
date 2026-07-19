@@ -50,28 +50,26 @@ def _vertices(mass: float, drag: float, length: float) -> list[dict]:
     ]
 
 
-def _input_type(param_id: str) -> str | None:
+def _input_type(param_id: str, *, pitch_angle: bool = False) -> str | None:
     """Cubism physics Input type for a driver param, or ``None`` if the param cannot drive a pendulum.
 
     Roll (…Z) tips the gravity vector ("Angle"); yaw (…X) translates the anchor sideways ("X"), and
     sideways translation is what actually swings a strand.
 
-    **Pitch (…Y) drives nothing, and is dropped.** We used to emit it as ``Type: "Y"``, with a comment
-    claiming a nod would bob the hair. It cannot. A "Y" input slides the pendulum's anchor straight
-    *down its own string*, and every physics output is ``Type: "Angle"`` — an angle off the strand's
-    rest direction. Sliding a pivot along the string it hangs from does not change that angle by any
-    amount, so the input contributed exactly zero, forever. That is not a reading of the spec, it is
-    what the simulation does (``tools/physics_excite.py``: the ``head_pitch`` clip moved 0 of 8 chains),
-    and it is what the real rigs say: **neither Hiyori nor Akari emits a single "Y" input** — Hiyori's
-    hair takes ``X:ParamAngleX`` + ``Angle:ParamAngleZ``, and Akari feeds even *ParamAngleY* in as
-    type "X".
+    **Pitch (…Y) is inert for a horizontal sway chain, and dropped there.** A "Y" input slides the
+    pendulum's anchor straight *down its own string*, and the sway output is ``Type: "Angle"`` — an angle
+    off the strand's rest direction. Sliding a pivot along the string it hangs from does not change that
+    angle, so the input contributed exactly zero (``tools/physics_excite.py``: ``head_pitch`` moved 0 of
+    8 sway chains), and neither Hiyori nor Akari emits a "Y" input.
 
-    Which leaves a real, honest gap: in Cubism, a nod does not swing the hair *through physics* at all.
-    It moves the hair through the head-turn deformation, like the rest of the head. Giving pitch its own
-    secondary motion would need a second output parameter carrying a *vertical* hair offset — the sway
-    keyform we author today is purely horizontal, so feeding pitch in as "X" (Akari's trick) would swing
-    the hair sideways on a nod, which is worse than nothing.
+    The honest fix for a nod-bounce is a *vertical* output param (``ParamHair*V``) on its own chain, fed
+    pitch as an **Angle** input (``pitch_angle=True``): a nod tips the strand's gravity, so it swings and
+    settles, and that swing maps to a straight-down hair drop. Tipping gravity is the one input that
+    moves a down-hanging pendulum from a nod (validated in the simulator: Y peaks 0.0, Angle peaks 0.23
+    and overshoots). Only the dedicated bounce chains set this; the sway chains still drop pitch.
     """
+    if pitch_angle and param_id.endswith("Y"):
+        return "Angle"
     if param_id.endswith("Z"):
         return "Angle"
     if param_id.endswith("Y"):
@@ -100,7 +98,7 @@ def physics3(rig: Rig) -> dict:
             "Input": [
                 {"Source": {"Target": "Parameter", "Id": d}, "Weight": _INPUT_WEIGHT,
                  "Type": t, "Reflect": False}
-                for d in ph.all_drivers() if (t := _input_type(d))
+                for d in ph.all_drivers() if (t := _input_type(d, pitch_angle=ph.pitch_angle))
             ],
             "Output": [{
                 "Destination": {"Target": "Parameter", "Id": ph.output_param},

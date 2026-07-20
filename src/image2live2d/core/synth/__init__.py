@@ -6,6 +6,7 @@ definition, not visible: the inside of a closed mouth is the obvious one. This p
 
 from __future__ import annotations
 
+from .eye import synthesize_closed_eyes
 from .mouth import synthesize_mouth_cavity
 
-__all__ = ["synthesize_mouth_cavity"]
+__all__ = ["synthesize_closed_eyes", "synthesize_mouth_cavity"]

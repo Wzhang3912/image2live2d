@@ -129,10 +129,11 @@ def _lift_occluded_accessories(stack: LayerStack, meshes) -> None:
 def _safe_synth(stack: LayerStack) -> None:
     """Paint the parts the decomposer cannot see. Tolerate a missing Pillow / unreadable texture so the
     spine still runs (without a cavity the mouth simply stays shut, as it did before)."""
-    from .core.synth import synthesize_mouth_cavity
+    from .core.synth import synthesize_closed_eyes, synthesize_mouth_cavity
 
     try:
-        synthesize_mouth_cavity(stack)
+        synthesize_mouth_cavity(stack)       # a mouth with no interior cannot open
+        synthesize_closed_eyes(stack)        # an eye with no closed pose can only squash
     except (ImportError, OSError):
         pass
 

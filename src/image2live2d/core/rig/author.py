@@ -209,11 +209,13 @@ def author_rig(
     left_eye = members(SemanticRole.eye_l, SemanticRole.eye_white_l, SemanticRole.pupil_l)
     if left_eye:
         axis_y = lm.eye_l.center[1] if lm.eye_l else None
-        params.append(_blink("ParamEyeLOpen", left_eye, axis_y=axis_y))
+        params.append(_blink("ParamEyeLOpen", left_eye,
+                             members(SemanticRole.eye_closed_l), axis_y=axis_y))
     right_eye = members(SemanticRole.eye_r, SemanticRole.eye_white_r, SemanticRole.pupil_r)
     if right_eye:
         axis_y = lm.eye_r.center[1] if lm.eye_r else None
-        params.append(_blink("ParamEyeROpen", right_eye, axis_y=axis_y))
+        params.append(_blink("ParamEyeROpen", right_eye,
+                             members(SemanticRole.eye_closed_r), axis_y=axis_y))
 
     # --- Mouth open -----------------------------------------------------------------------------
     mouth = members(SemanticRole.mouth)
@@ -445,16 +447,38 @@ def _head_turn_scaffold(param_id: str) -> Parameter:
     return p
 
 
-def _blink(param_id: str, group: list[tuple[str, Mesh]], *, axis_y: float | None = None) -> Parameter:
+def _blink(param_id: str, group: list[tuple[str, Mesh]],
+           closed_group: list[tuple[str, Mesh]] = (), *, axis_y: float | None = None) -> Parameter:
     # default (open) = 1.0 -> rest; 0.0 (closed) -> collapse to the lid line.
     # With a landmark lid axis (axis_y) the whole group collapses toward that shared y; otherwise
     # each part collapses toward its own bbox midline.
-    open_kf = Keyform(value=1.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
+    #
+    # When a synthesised closed-eye lash line exists (closed_group; see core.synth.eye) this becomes a
+    # CROSSFADE: the open parts collapse AND fade out while the lash line fades in, so a shut eye is the
+    # clean lash line, not the compressed sliver of iris+white a bare squash leaves (the _BLINK residual).
+    # Needs the per-keyform opacity the moc3 emitter now honours. With no lash line it degrades to the
+    # squash-only blink exactly as before (no opacity overrides emitted).
     if axis_y is None:
-        closed = {pid: _collapse_vertical(m, _BLINK) for pid, m in group}
+        collapsed = {pid: _collapse_vertical(m, _BLINK) for pid, m in group}
     else:
-        closed = {pid: _collapse_to(m, _BLINK, axis_y) for pid, m in group}
-    closed_kf = Keyform(value=0.0, mesh_offsets=closed)
+        collapsed = {pid: _collapse_to(m, _BLINK, axis_y) for pid, m in group}
+
+    closed_off = dict(collapsed)
+    open_off = {pid: _zeros(m) for pid, m in group}
+    for pid, m in closed_group:                       # the lash line itself never moves — it only fades
+        closed_off[pid] = _zeros(m)
+        open_off[pid] = _zeros(m)
+
+    closed_op: dict[str, float] = {}
+    open_op: dict[str, float] = {}
+    if closed_group:
+        for pid, _ in group:                          # open parts: gone when shut, full when open
+            closed_op[pid], open_op[pid] = 0.0, 1.0
+        for pid, _ in closed_group:                   # lash line: full when shut, gone when open
+            closed_op[pid], open_op[pid] = 1.0, 0.0
+
+    closed_kf = Keyform(value=0.0, mesh_offsets=closed_off, opacity_overrides=closed_op)
+    open_kf = Keyform(value=1.0, mesh_offsets=open_off, opacity_overrides=open_op)
     return _set_keyforms(param_id, [closed_kf, open_kf])
 
 

@@ -577,6 +577,7 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
             total *= len(ks)
         keyforms = []
         opacities = []
+        keyed_opacity = False                             # did any keyform actually override opacity?
         for idx in range(total):
             pos = [list(v) for v in mesh.vertices]        # rest (our space)
             op = part.opacity                             # base; each keying param multiplies its factor
@@ -590,6 +591,7 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 ov = _opacity_at(p, keys_per[pi][ki], part.id)
                 if ov is not None:
                     op *= ov
+                    keyed_opacity = True
             conv = warp_child_conv[part.id] if is_child else to_moc
             keyforms.append([conv(x, y) for x, y in pos])
             opacities.append(op)
@@ -613,9 +615,12 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
             id=part.id, part_index=part_index, texture_no=texture_no,
             uvs=uvs, triangles=[tuple(t) for t in mesh.triangles],
             param_indices=[pidx[p.id] for p in affecting], keyforms=keyforms,
-            # Only carry opacities when a param actually keys this part's fade; otherwise leave empty so
-            # the emitter falls back to fully-opaque, exactly the pre-opacity behaviour (no regression).
-            opacities=opacities if opac else []))
+            # Only carry opacities when a keyform actually overrode this part's opacity; otherwise leave
+            # empty so the emitter falls back to fully-opaque, exactly the pre-opacity behaviour. (Keyed by
+            # the override actually firing, NOT by whether the driving param was opacity-only — an eye-lid
+            # part is driven by ParamEyeOpen for BOTH its collapse and its fade, so ``opac`` is empty for
+            # it yet its opacity very much varies.)
+            opacities=opacities if keyed_opacity else []))
 
     # Canvas info drives the official runtime's default camera. Vertices span MODEL_SPAN units; the canvas
     # must span the same in units: canvas_units = width_px / pixelsPerUnit == MODEL_SPAN. With

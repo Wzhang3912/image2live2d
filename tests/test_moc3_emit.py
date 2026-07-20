@@ -145,6 +145,30 @@ def test_rig_to_moc3_bakes_opacity_only_param_into_a_grid_axis():
     assert r.get("parameters", "ids") == ["ParamEyeLOpen"]
 
 
+def _lid_rig():
+    # A part driven by ONE param for BOTH a vertex offset (a lid collapse) AND an opacity fade — the eye
+    # lineart case. 'torso' keeps it off the head so no warp deformer complicates the grid.
+    tri = [(0.45, 0.45), (0.55, 0.45), (0.5, 0.55)]
+    return Rig(
+        meta=Meta(name="t"),
+        textures=[Texture(id="t0", path="t0.png", width=64, height=64)],
+        parts=[Part(id="lid", semantic_role=SemanticRole.torso, texture_id="t0", draw_order=5)],
+        meshes=[Mesh(part_id="lid", vertices=tri, uvs=[(0, 0), (1, 0), (0.5, 1)], triangles=[(0, 1, 2)])],
+        parameters=[Parameter(id="ParamEyeLOpen", min=0.0, max=1.0, default=1.0, keyforms=[
+            Keyform(value=0.0, mesh_offsets={"lid": [(0.0, 0.02)] * 3}, opacity_overrides={"lid": 0.0}),
+            Keyform(value=1.0, mesh_offsets={}, opacity_overrides={"lid": 1.0}),
+        ])],
+    )
+
+
+def test_rig_to_moc3_emits_opacity_when_the_driving_param_also_moves_the_part():
+    # Regression: the opacity was kept only when its param was opacity-ONLY, so a lid driven by
+    # ParamEyeLOpen for BOTH its collapse and its fade silently stayed fully opaque. It must fade.
+    r = read_moc3(write_moc3(rig_to_moc3(_lid_rig())))
+    assert r.get("artMeshes", "keyformSourcesCounts") == [2]
+    assert r.get("artMeshKeyforms", "opacities") == [0.0, 1.0]   # value 0 -> faded out, value 1 -> shown
+
+
 def _have_core() -> bool:
     try:
         import cubism_core

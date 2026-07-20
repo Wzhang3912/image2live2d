@@ -123,3 +123,54 @@ def test_solid_png_is_valid_png():
     png = solid_png(4, 3)
     assert png[:8] == b"\x89PNG\r\n\x1a\n"
     assert b"IHDR" in png[:24] and png.endswith(b"IEND" + png[-4:])
+
+
+def _eye_crossfade_rig():
+    from image2live2d.irr.schema import (
+        Keyform, Mesh, Meta, Parameter, Part, Rig, SemanticRole, Texture,
+    )
+    tri = [(0.45, 0.45), (0.55, 0.45), (0.5, 0.55)]
+    uvs, tris = [(0, 0), (1, 0), (0.5, 1)], [(0, 1, 2)]
+    return Rig(
+        meta=Meta(name="t"),
+        textures=[Texture(id="t0", path="t0.png", width=64, height=64)],
+        parts=[
+            Part(id="eye", semantic_role=SemanticRole.eye_l, texture_id="t0", draw_order=5),
+            Part(id="lash", semantic_role=SemanticRole.eye_closed_l, texture_id="t0", draw_order=6),
+        ],
+        meshes=[Mesh(part_id="eye", vertices=tri, uvs=uvs, triangles=tris),
+                Mesh(part_id="lash", vertices=tri, uvs=uvs, triangles=tris)],
+        parameters=[Parameter(id="ParamEyeLOpen", min=0.0, max=1.0, default=1.0, keyforms=[
+            Keyform(value=0.0, opacity_overrides={"eye": 0.0, "lash": 1.0}),
+            Keyform(value=1.0, opacity_overrides={"eye": 1.0, "lash": 0.0}),
+        ])],
+    )
+
+
+def test_opacity_overrides_become_nijilive_opacity_bindings():
+    # A closed-eye crossfade: the .inp must carry opacity bindings (not just static part opacity), or the
+    # synthesised lash line shows over the OPEN eye at rest. axis is ascending (closed=0 -> open=1).
+    build = build_puppet(_eye_crossfade_rig())
+    param = next(p for p in build.puppet["param"] if p["name"] == "ParamEyeLOpen")
+    assert param["axis_points"][0] == [0.0, 1.0]
+
+    uuid_name = {}
+    for n in _walk_nodes(build.puppet):
+        uuid_name[n["uuid"]] = n.get("name")
+    opac = {uuid_name.get(b["node"]): [cell[0] for cell in b["values"]]
+            for b in param["bindings"] if b["param_name"] == "opacity"}
+    assert opac["eye"] == [0.0, 1.0]     # open eye: gone when closed, shown when open
+    assert opac["lash"] == [1.0, 0.0]    # lash line: shown when closed, gone when open (invisible at rest)
+
+
+def _walk_nodes(puppet):
+    def walk(n):
+        if isinstance(n, dict):
+            if "uuid" in n:
+                yield n
+            for c in n.get("children", []) or []:
+                yield from walk(c)
+        elif isinstance(n, list):
+            for c in n:
+                yield from walk(c)
+    yield from walk(puppet.get("nodes", puppet))

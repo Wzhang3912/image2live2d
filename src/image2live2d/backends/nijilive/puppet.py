@@ -271,6 +271,12 @@ def _parameter(uuid: int, param: Parameter, rig: Rig, part_uuid: dict[str, int],
                 rot_bindings.append(_rot_binding(g["uuid"], param, channel, max_rad))
     bindings = _deform_bindings(keyforms, rig, part_uuid, scale, exclude=exclude) if keyforms else []
     bindings.extend(rot_bindings)
+    # Opacity fades (a part that appears/disappears across the param — e.g. a synthesised closed-eye lash
+    # line crossfading in on ParamEyeOpen). Independent of the deform/transform split above, so exclude
+    # does not apply. Without this the .inp shipped these parts at their static opacity — the lash line was
+    # painted over the OPEN eye at rest (see core.synth.eye; the moc3 path got this via opacity keyforms).
+    if keyforms:
+        bindings.extend(_opacity_bindings(keyforms, rig, part_uuid))
 
     return {
         "uuid": uuid,
@@ -459,6 +465,27 @@ def head_group_ids(drawn) -> set:
                 if hx0 - 0.3 * hw <= cx <= hx1 + 0.3 * hw and hy0 - 0.2 * hh <= cy <= hy1 + 0.3 * hh:
                     ids.add(p.id)
     return ids
+
+
+def _opacity_bindings(keyforms, rig: Rig, part_uuid: dict[str, int]) -> list[dict]:
+    """One ``opacity`` value-binding per part whose opacity this parameter keys (``opacity_overrides``).
+    A part with no override at a given keyform holds its base opacity there, so a fade that only touches
+    the extremes still interpolates from the resting value. Scalar ``values[x][y]`` like the transform
+    bindings; ordered by ascending keyform value to match the param's ``axis_points``."""
+    base = {p.id: p.opacity for p in rig.parts}
+    affected: list[str] = []
+    for kf in keyforms:
+        for pid in kf.opacity_overrides:
+            if pid not in affected and pid in part_uuid:
+                affected.append(pid)
+    bindings: list[dict] = []
+    for pid in affected:
+        values = [[kf.opacity_overrides.get(pid, base.get(pid, 1.0))] for kf in keyforms]
+        bindings.append({
+            "node": part_uuid[pid], "param_name": "opacity",
+            "values": values, "isSet": [[True] for _ in keyforms], "interpolate_mode": "Linear",
+        })
+    return bindings
 
 
 def _rot_binding(node_uuid: int, param, channel: str, max_rad: float) -> dict:

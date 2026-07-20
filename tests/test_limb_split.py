@@ -248,3 +248,64 @@ def test_a_real_right_leg_stops_the_cut():
                               draw_order=2, width=64, height=64))
     meshes.append(_lobes("realleg", [(0.60, 0.10, 0.66, 0.50)]))
     assert split_fused_legs(stack, meshes) == []
+
+
+# --- arms the decomposer mislabelled as legs -------------------------------------------------------
+def _armleg_scene(limb_boxes, role=R.leg_r):
+    """A head, a lower body reaching the feet, and one limb — so head_box/body_box (and the feet
+    reference) are all defined. The limb at `limb_boxes` is labelled a leg."""
+    return _scene([
+        ("00_face_base", R.face_base, [(0.44, 0.80, 0.54, 0.95)]),   # head near the top (y-up)
+        ("02_clothing", R.clothing, [(0.40, 0.02, 0.60, 0.50)]),     # torso->feet, sets the body bottom
+        ("01_leg", role, limb_boxes),
+    ])
+
+
+def test_a_leg_labelled_part_at_the_shoulder_becomes_an_arm():
+    """See-through labels a slim character's arms `leg_l`/`leg_r`. An arm attaches at the shoulder (top
+    at the head's base) and stops mid-body (never reaches the feet), so it must be re-roled to an arm."""
+    from image2live2d.core.structure import reassign_arm_mislabeled_as_leg
+
+    # slender limb: top 0.79 (just below head base 0.80), bottom 0.45 (mid-body), taller than wide
+    stack, meshes = _armleg_scene([(0.30, 0.45, 0.40, 0.79)], role=R.leg_r)
+    changed = reassign_arm_mislabeled_as_leg(stack, meshes)
+    assert changed == ["01_leg"]
+    assert _roles(stack)["01_leg"] is R.arm_r          # side preserved: leg_r -> arm_r
+
+
+def test_a_real_leg_stays_a_leg():
+    """A leg reaches the floor; it must not be re-roled to an arm."""
+    from image2live2d.core.structure import reassign_arm_mislabeled_as_leg
+
+    # limb runs from the hip (0.45) down to the feet (0.04), near the midline
+    stack, meshes = _armleg_scene([(0.44, 0.04, 0.52, 0.45)], role=R.leg_r)
+    assert reassign_arm_mislabeled_as_leg(stack, meshes) == []
+    assert _roles(stack)["01_leg"] is R.leg_r
+
+
+def test_a_limb_that_rises_above_the_head_is_not_an_arm():
+    """Drill-hair a decomposer also mislabels `leg` rises past the crown. An arm never rises above the
+    head, so the shoulder test rejects it — it is left a leg rather than given arm articulation."""
+    from image2live2d.core.structure import reassign_arm_mislabeled_as_leg
+
+    # top 0.98 sits above the head top (0.95)
+    stack, meshes = _armleg_scene([(0.30, 0.82, 0.42, 0.98)], role=R.leg_r)
+    assert reassign_arm_mislabeled_as_leg(stack, meshes) == []
+    assert _roles(stack)["01_leg"] is R.leg_r
+
+
+def test_a_wide_garment_blob_is_not_an_arm():
+    """An arm is slender. A wide low blob (a garment) mislabelled a leg must not gain arm articulation."""
+    from image2live2d.core.structure import reassign_arm_mislabeled_as_leg
+
+    # wider than tall, in the mid-body
+    stack, meshes = _armleg_scene([(0.30, 0.55, 0.62, 0.72)], role=R.leg_l)
+    assert reassign_arm_mislabeled_as_leg(stack, meshes) == []
+
+
+def test_no_reassign_without_a_head():
+    """With no face to place the shoulder line, we do not guess."""
+    from image2live2d.core.structure import reassign_arm_mislabeled_as_leg
+
+    stack, meshes = _scene([("01_leg", R.leg_r, [(0.30, 0.45, 0.40, 0.79)])])
+    assert reassign_arm_mislabeled_as_leg(stack, meshes) == []

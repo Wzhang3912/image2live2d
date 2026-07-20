@@ -65,6 +65,7 @@ from .strands import (
     strand_param_id,
 )
 from .limbs import (
+    reassign_arm_mislabeled_as_leg,
     split_bundled_pairs,
     split_fused_legs,
 )
@@ -124,6 +125,7 @@ __all__ = [
     "FACE_FEATURES",
     "BROWS",
     "normalize_face_zorder",
+    "reassign_arm_mislabeled_as_leg",
     "split_bundled_pairs",
     "split_fused_legs",
 ]

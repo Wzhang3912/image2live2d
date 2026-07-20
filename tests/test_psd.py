@@ -52,20 +52,22 @@ def test_raws_to_stack_builds_pipeline_ready_stack(tmp_path):
 
     canvas = (64, 64)
 
-    def blob(box):
+    def blob(box, color=(200, 120, 120, 255)):
         img = Image.new("RGBA", canvas, (0, 0, 0, 0))
         for x in range(box[0], box[2]):
             for y in range(box[1], box[3]):
-                img.putpixel((x, y), (200, 120, 120, 255))
+                img.putpixel((x, y), color)
         # crop to extent + offset, like a PSD layer
         crop = img.crop(box)
         return crop, (box[0], box[1])
 
-    # bottom -> top order
-    specs = [("face skin", (10, 10, 54, 54)), ("left eye", (20, 24, 30, 32)),
-             ("right eye", (40, 24, 50, 32)), ("mouth", (28, 40, 44, 48))]
+    # bottom -> top order. The mouth is a DARK block so it reads as already-drawn-open (a real oral
+    # cavity, much darker than skin) — synth leaves it alone, so the part set stays 4 with no cavity.
+    _DARK = (40, 20, 25, 255)
+    specs = [("face skin", (10, 10, 54, 54), None), ("left eye", (20, 24, 30, 32), None),
+             ("right eye", (40, 24, 50, 32), None), ("mouth", (28, 40, 44, 48), _DARK)]
     raws = [RawLayer(name=n, image=img, offset=off) for n, (img, off) in
-            ((n, blob(b)) for n, b in specs)]
+            ((n, blob(b, c) if c else blob(b)) for n, b, c in specs)]
 
     stack = raws_to_stack(raws, canvas, tmp_path / "layers")
     assert [lyr.semantic_role for lyr in stack.layers] == [R.face_base, R.eye_l, R.eye_r, R.mouth]
@@ -75,7 +77,7 @@ def test_raws_to_stack_builds_pipeline_ready_stack(tmp_path):
     # the extracted stack drives the rest of the spine unchanged
     rig = rig_from_stack(stack, name="frompsd")
     assert {"ParamMouthOpenY", "ParamEyeLOpen", "ParamEyeROpen"} <= rig.parameter_ids()
-    assert len(rig.parts) == 4          # no cavity: this stub mouth is a shape, not a lip line
+    assert len(rig.parts) == 4          # no cavity: this stub mouth is a DARK shape -> read as already-drawn-open, left alone
 
 
 @pytest.mark.skipif(not (_HAS_PIL and _HAS_PSD), reason="needs Pillow + psd-tools")
@@ -89,17 +91,17 @@ def test_from_psd_end_to_end(tmp_path):
 
     psd = PSDImage.new(mode="RGBA", size=(64, 64))
 
-    def add(name, box):
+    def add(name, box, color=(200, 120, 120, 255)):
         img = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
         for x in range(box[0], box[2]):
             for y in range(box[1], box[3]):
-                img.putpixel((x, y), (200, 120, 120, 255))
+                img.putpixel((x, y), color)
         psd.append(PixelLayer.frompil(img, psd, name))
 
     add("face skin", (8, 8, 56, 56))  # appended first -> bottom -> draw_order 0
     add("left eye", (18, 22, 28, 30))
     add("right eye", (36, 22, 46, 30))
-    add("mouth", (26, 40, 40, 46))
+    add("mouth", (26, 40, 40, 46), (40, 20, 25, 255))  # DARK -> reads as already-open, no synth cavity
     psd_path = tmp_path / "char.psd"
     psd.save(psd_path)
 
@@ -108,4 +110,4 @@ def test_from_psd_end_to_end(tmp_path):
     assert {R.eye_l, R.eye_r, R.mouth} <= {lyr.semantic_role for lyr in stack.layers}
     rig = rig_from_stack(stack, name="char")
     assert "ParamMouthOpenY" in rig.parameter_ids()
-    assert len(rig.parts) == 4          # no cavity: this stub mouth is a shape, not a lip line
+    assert len(rig.parts) == 4          # no cavity: this stub mouth is a DARK shape -> read as already-drawn-open, left alone

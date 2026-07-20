@@ -58,9 +58,18 @@ _SUPERSAMPLE = 4
 
 # Only a *closed* mouth needs an interior painted for it. A mouth the artist already drew open carries
 # its own — real teeth, a real tongue, in the character's actual style — and painting behind that would
-# be inventing over art that already exists. A closed mouth is a stroke: on a real character, 21x6 px.
-# An open one is a shape. The aspect ratio tells them apart, and nothing else has to.
-_CLOSED_MAX_ASPECT = 0.40     # height/width above this, the mouth is already open — leave it alone
+# be inventing over art that already exists.
+#
+# Aspect ratio ALONE was tried and is not enough: a closed smile with lip shading (an upper and lower
+# lip, a soft curve) has a tall solid box too — measured aspect 0.41-0.69 on four test characters that
+# are all plainly closed — so the aspect gate denied them a cavity and their mouths could not open (found
+# by the capability report: 5 of 8 characters). What actually marks a drawn-open mouth is a genuine dark
+# **interior cavity** — pixels much darker than the character's skin, a real oral shadow, not a light
+# lip. So a mouth is "already open" only when it is BOTH tall AND has that dark interior: a closed smile
+# (light interior, darkfrac ~0) gets its cavity; a true open mouth (dark cavity + teeth) is left alone.
+_CLOSED_MAX_ASPECT = 0.40     # height/width below this the box is a stroke — always a closed mouth
+_DARK_INTERIOR_FRAC = 0.15    # a tall box is "open" only if at least this fraction of its solid pixels
+_DARK_REL_SKIN = 0.60         # are darker than _DARK_REL_SKIN x the skin luminance (a real cavity)
 
 
 def _palette(img) -> tuple[tuple[int, int, int], tuple[int, int, int], tuple[int, int, int]]:
@@ -141,6 +150,49 @@ def _alpha_bbox_solid(img) -> tuple[int, int, int, int] | None:
     return x0, y0, x1 + 1, y1 + 1                           # -> exclusive, matching getbbox
 
 
+def _skin_luminance(stack: LayerStack) -> float | None:
+    """Median luminance of the character's face skin, from the ``face_base`` layer's solid pixels.
+
+    The reference a cavity is measured against — a real oral shadow is much darker than skin. Returns
+    ``None`` when there is no face to compare to (then the caller falls back to aspect alone)."""
+    try:
+        from PIL import Image
+    except ImportError:                                   # pragma: no cover - Pillow gated
+        return None
+    import numpy as np
+
+    faces = stack.by_role(SemanticRole.face_base)
+    if not faces or not Path(faces[0].texture_path).is_file():
+        return None
+    arr = np.asarray(Image.open(faces[0].texture_path).convert("RGBA"))
+    solid = arr[..., 3] >= 64
+    if not solid.any():
+        return None
+    lum = arr[..., :3].astype(float) @ (0.299, 0.587, 0.114)
+    return float(np.median(lum[solid]))
+
+
+def _has_dark_interior(img, box: tuple[int, int, int, int], skin_lum: float | None) -> bool:
+    """Does the mouth box hold a genuine dark cavity — solid pixels much darker than skin?
+
+    True only when a real fraction of the lip box's solid pixels fall below ``_DARK_REL_SKIN`` x the skin
+    luminance (a drawn-open mouth's oral shadow). A closed smile is lip/skin toned, so its darkfrac is
+    ~0. With no skin reference we cannot tell a dark lip from a cavity, so we assume the old aspect-only
+    verdict held (return ``True`` — the box was already tall, so treat it as open, unchanged behaviour)."""
+    if skin_lum is None:
+        return True
+    import numpy as np
+
+    x0, y0, x1, y1 = box
+    reg = np.asarray(img)[y0:y1, x0:x1]
+    solid = reg[..., 3] >= 64
+    if not solid.any():
+        return False
+    lum = reg[..., :3].astype(float) @ (0.299, 0.587, 0.114)
+    darkfrac = float((lum[solid] < _DARK_REL_SKIN * skin_lum).mean())
+    return darkfrac >= _DARK_INTERIOR_FRAC
+
+
 def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     """Paint an inner mouth behind the lips and splice it into ``stack``. Returns the new layer, or
     ``None`` if there is nothing to do.
@@ -174,8 +226,8 @@ def synthesize_mouth_cavity(stack: LayerStack) -> Layer | None:
     lip_w, lip_h = x1 - x0, y1 - y0
     if lip_w < 2 or lip_h < 1:
         return None
-    if lip_h > _CLOSED_MAX_ASPECT * lip_w:
-        return None    # this mouth is already drawn open — the artist's own interior is in there
+    if lip_h > _CLOSED_MAX_ASPECT * lip_w and _has_dark_interior(img, box, _skin_luminance(stack)):
+        return None    # tall AND a real dark cavity -> already drawn open; leave the artist's own in
 
     cav_h = lip_w * _CAVITY_H_FRAC                  # from the WIDTH — the mouth's only honest dimension
     inset = lip_w * _CAVITY_W_INSET

@@ -237,14 +237,16 @@ def test_end_to_end_synthetic_dir_to_inp(tmp_path):
     stack = decompose.from_layer_dir(layer_dir)
     rig = rig_from_stack(stack, name="synthetic", source="synthetic")
     # no synthesised cavity here: this stub mouth is a solid DARK block, so core.synth reads it as a
-    # mouth already drawn open (tall AND a genuine dark interior) and leaves the artist's own alone
-    assert rig.part_ids() == {"00_face_base", "10_eye_l", "11_eye_r", "20_mouth"}
+    # mouth already drawn open (tall AND a genuine dark interior) and leaves the artist's own alone.
+    # The eyes DO get synthesised closed-eye lash lines (eye_l/eye_r each gain an eye_closed_* part).
+    assert rig.part_ids() == {"00_face_base", "10_eye_l", "11_eye_r", "20_mouth",
+                              "10_eye_closed_l", "11_eye_closed_r"}
     assert "ParamMouthOpenY" in rig.parameter_ids()
 
     out = NijiliveEmitter(asset_root=layer_dir).emit(rig, tmp_path)
     inp = InpFile.read(out)
     puppet = json.loads(inp.payload)
-    assert len(inp.textures) == 4
+    assert len(inp.textures) == 6      # 4 decomposed + 2 synthesised closed-eye lash lines
     assert all(t.data[:8] == b"\x89PNG\r\n\x1a\n" for t in inp.textures)
     def _part_names(node):  # parts may be nested under the 'head' group node now
         acc = {node["name"]} if node.get("type") == "Part" else set()

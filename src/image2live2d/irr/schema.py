@@ -44,6 +44,8 @@ class SemanticRole(str, Enum):
     eye_white_r = "eye_white_r"
     pupil_l = "pupil_l"
     pupil_r = "pupil_r"
+    eye_closed_l = "eye_closed_l"  # synthesised closed-eye lash line — see core.synth.eye
+    eye_closed_r = "eye_closed_r"
     nose = "nose"
     mouth = "mouth"
     mouth_cavity = "mouth_cavity"  # synthesised interior behind the lips — see core.synth.mouth

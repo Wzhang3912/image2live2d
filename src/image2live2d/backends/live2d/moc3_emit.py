@@ -19,7 +19,7 @@ SourcesBeginIndices` in **float-component units** (= 2 × vertex offset). See KE
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 
 from .moc3_binary import COUNT_KEYS, FIELDS, Moc3, V3_00
 
@@ -53,6 +53,8 @@ class EmitMesh:
     triangles: list[tuple[int, int, int]]
     param_indices: list[int]                       # which parameters drive this mesh (indices into params)
     keyforms: list[list[tuple[float, float]]]      # vertex positions per grid keyform (len == ∏ key counts, or 1)
+    opacities: list[float] = dc_field(default_factory=list)  # absolute opacity per grid keyform (parallel to
+    #                                                       keyforms; empty -> fully opaque everywhere)
 
 
 @dataclass
@@ -183,8 +185,11 @@ def build_moc3(canvas: dict, params: list[EmitParam], parts: list[EmitPart],
         uvs_flat.extend(m.uvs)
         for tri in m.triangles:
             pos_indices.extend(tri)
-        for kf in m.keyforms:                                          # one keyform per grid point
-            amk_opacity.append(1.0)
+        for ki, kf in enumerate(m.keyforms):                           # one keyform per grid point
+            # Per-keyform opacity: a drawable can fade in/out across a parameter axis (e.g. a synthesised
+            # closed-eye lash line that appears only as ParamEyeOpen -> 0). ``opacities`` is parallel to
+            # ``keyforms``; absent (the common case) -> fully opaque, exactly the old behaviour.
+            amk_opacity.append(m.opacities[ki] if m.opacities else 1.0)
             amk_draworder.append(parts[m.part_index].draw_order)
             amk_pos_begin.append(KEYFORM_POS_UNIT * len(keyform_pos))   # block start is 8-pair aligned
             keyform_pos.extend(kf)
@@ -342,6 +347,25 @@ def _offset_at(param, value, part_id, nverts):
                 return offs
             break
     return [(0.0, 0.0)] * nverts
+
+
+def _opacity_at(param, value, part_id):
+    """Absolute opacity override for ``part_id`` at ``param``'s keyform ``value``, or ``None`` if this
+    param does not key the part's opacity there (then the part keeps its base opacity along this axis)."""
+    for kf in param.keyforms:
+        if kf.value == value:
+            return kf.opacity_overrides.get(part_id)
+    return None
+
+
+def _opacity_params(rig, part_id):
+    """Parameters that key ``part_id``'s opacity (via ``opacity_overrides``). These must join the mesh's
+    keyform grid even with zero per-vertex offset, or the opacity fade has no axis to vary along."""
+    out = []
+    for p in rig.parameters:
+        if any(part_id in kf.opacity_overrides for kf in p.keyforms):
+            out.append(p)
+    return out
 
 
 def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
@@ -535,12 +559,16 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         # the grid axes for multi-param meshes (arms/legs, 6 params) -> they read the wrong keyform cell
         # and scatter in Cubism Viewer, while the web Cubism Core (which follows the listed order) still
         # renders them assembled — that core/Viewer split is exactly what this ordering bug looks like.
-        affecting = sorted(affecting, key=lambda p: pidx[p.id])
         dropped = sum(1 for p in rig.parameters
                       if any(any(dx or dy for dx, dy in kf.mesh_offsets.get(part.id, []))
                              for kf in p.keyforms)) - len(affecting)
         if dropped > 0:
             log(f"{part.id}: capped to {MAX_PARAMS_PER_MESH} params ({dropped} weaker dropped)")
+        # Params that key this part's OPACITY (fade in/out) must also get a grid axis, even with no
+        # per-vertex offset — otherwise the opacity has no parameter to vary along. Union with the
+        # offset-driven params, then lay the whole grid out in canonical (ascending param-index) order.
+        opac = [p for p in _opacity_params(rig, part.id) if p not in affecting]
+        affecting = sorted(affecting + opac, key=lambda p: pidx[p.id])
         keys_per = [sorted(kf.value for kf in p.keyforms) for p in affecting]
 
         # cartesian grid, param[0] fastest-varying (matches PurismCore index_stride convention)
@@ -548,8 +576,11 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         for ks in keys_per:
             total *= len(ks)
         keyforms = []
+        opacities = []
+        keyed_opacity = False                             # did any keyform actually override opacity?
         for idx in range(total):
             pos = [list(v) for v in mesh.vertices]        # rest (our space)
+            op = part.opacity                             # base; each keying param multiplies its factor
             rem = idx
             for pi, p in enumerate(affecting):
                 ki = rem % len(keys_per[pi])
@@ -557,8 +588,13 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 for j, (dx, dy) in enumerate(_offset_at(p, keys_per[pi][ki], part.id, nv)):
                     pos[j][0] += dx
                     pos[j][1] += dy
+                ov = _opacity_at(p, keys_per[pi][ki], part.id)
+                if ov is not None:
+                    op *= ov
+                    keyed_opacity = True
             conv = warp_child_conv[part.id] if is_child else to_moc
             keyforms.append([conv(x, y) for x, y in pos])
+            opacities.append(op)
 
         if atlas_uv is not None and part.id in atlas_uv:
             r = atlas_uv[part.id]
@@ -578,7 +614,13 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         meshes.append(EmitMesh(
             id=part.id, part_index=part_index, texture_no=texture_no,
             uvs=uvs, triangles=[tuple(t) for t in mesh.triangles],
-            param_indices=[pidx[p.id] for p in affecting], keyforms=keyforms))
+            param_indices=[pidx[p.id] for p in affecting], keyforms=keyforms,
+            # Only carry opacities when a keyform actually overrode this part's opacity; otherwise leave
+            # empty so the emitter falls back to fully-opaque, exactly the pre-opacity behaviour. (Keyed by
+            # the override actually firing, NOT by whether the driving param was opacity-only — an eye-lid
+            # part is driven by ParamEyeOpen for BOTH its collapse and its fade, so ``opac`` is empty for
+            # it yet its opacity very much varies.)
+            opacities=opacities if keyed_opacity else []))
 
     # Canvas info drives the official runtime's default camera. Vertices span MODEL_SPAN units; the canvas
     # must span the same in units: canvas_units = width_px / pixelsPerUnit == MODEL_SPAN. With

@@ -62,6 +62,7 @@ from .strands import (
     hair_specs_from_params,
     hair_strands,
     mesh_components,
+    split_lobe_by_tips,
     strand_param_id,
 )
 from .limbs import (
@@ -103,6 +104,7 @@ __all__ = [
     "hair_strands",
     "hair_specs_from_params",
     "mesh_components",
+    "split_lobe_by_tips",
     "strand_param_id",
     "SKIRT_PARAM_IDS",
     "ZoneSpec",

@@ -10,7 +10,7 @@ import pytest
 
 from image2live2d.core.physics import generate_physics
 from image2live2d.core.rig import author_rig, select_template
-from image2live2d.core.structure import hair_strands
+from image2live2d.core.structure import hair_strands, split_lobe_by_tips
 from image2live2d.core.types import Layer, LayerStack
 from image2live2d.irr.params import make_parameter
 from image2live2d.irr.schema import Mesh
@@ -142,3 +142,62 @@ def test_hair_sways_like_a_cantilever_not_a_sliding_sheet():
     assert tip > 0.0                                 # the tips still swing
     # quadratic: mid moves ~1/4 of the tip, not the ~1/2 a shearing sheet would give
     assert mid / tip < 0.35
+
+
+def _hair_mesh(pid, bottom_of, *, cols=24, rows=6):
+    """A hair sheet whose BOTTOM edge follows ``bottom_of(x)`` (y is y-DOWN, so a larger value hangs
+    lower). One connected grid; triangles stitch neighbouring columns so it is a single component."""
+    verts, index = [], {}
+    for c in range(cols):
+        x = c / (cols - 1)
+        top, bot = 0.15, bottom_of(x)
+        for r in range(rows):
+            index[(c, r)] = len(verts)
+            verts.append((x, top + (bot - top) * r / (rows - 1)))
+    tris = []
+    for c in range(cols - 1):
+        for r in range(rows - 1):
+            a, b = index[(c, r)], index[(c + 1, r)]
+            cc, d = index[(c, r + 1)], index[(c + 1, r + 1)]
+            tris.append((a, b, cc))
+            tris.append((b, d, cc))
+    return Mesh(part_id=pid, vertices=verts, uvs=[(0.0, 0.0)] * len(verts), triangles=tris)
+
+
+def _two_locks(x):   # two hanging locks at x~0.2 and x~0.8, a higher saddle between
+    import math
+    dip = max(math.exp(-((x - 0.2) ** 2) / 0.01), math.exp(-((x - 0.8) ** 2) / 0.01))
+    return 0.55 + 0.35 * dip
+
+
+def test_split_lobe_by_tips_finds_two_locks():
+    m = _hair_mesh("hair", _two_locks)
+    groups = split_lobe_by_tips(m, list(range(len(m.vertices))))
+    assert len(groups) == 2
+    # each lock owns a contiguous x-slice; the split falls near the saddle (x~0.5)
+    left_max = max(m.vertices[i][0] for i in groups[0])
+    right_min = min(m.vertices[i][0] for i in groups[1])
+    assert left_max <= right_min                       # no interleaving
+    assert 0.35 < left_max < 0.65                       # split near the saddle, not at an edge
+
+
+def test_a_round_lobe_is_not_force_split():
+    # a single smooth bump (one tip) must stay one strand — a bun is not two locks
+    m = _hair_mesh("hair", lambda x: 0.9 - 0.3 * (2 * x - 1) ** 2)
+    assert split_lobe_by_tips(m, list(range(len(m.vertices)))) == [list(range(len(m.vertices)))]
+
+
+def test_connected_hair_sheet_with_two_locks_yields_two_strands():
+    layers = [Layer(id="face", semantic_role=R.face_base, texture_path=Path("f.png"),
+                    draw_order=0, width=64, height=64),
+              Layer(id="fringe", semantic_role=R.hair_front, texture_path=Path("h.png"),
+                    draw_order=10, width=64, height=64)]
+    meshes = [_mesh("face", 0.35, 0.6, 0.65, 0.95), _hair_mesh("fringe", _two_locks)]
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+
+    specs = [s for s in hair_strands(stack, meshes) if s.role is R.hair_front]
+    assert {s.param_id for s in specs} == {"ParamHairFront", "ParamHairFront2"}
+    # each strand owns a real vertex subset (not the whole mesh) and they are disjoint
+    assert all(s.vertex_indices for s in specs)
+    a, b = (set(s.vertex_indices) for s in specs)
+    assert not (a & b)

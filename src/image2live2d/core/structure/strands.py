@@ -34,7 +34,14 @@ _MIN_COMPONENT_FRAC = 0.1
 # (Adapted from Anime2.5DRig's detectStrands; we read the contour off the mesh grid, not the raw alpha.)
 _TIP_BINS = 64                # x-resolution of the bottom contour
 _TIP_SMOOTH = 9              # box-smoothing window over the bins (kills antialiasing wobble)
-_TIP_MIN_PROMINENCE = 0.18   # a tip must dip this far (fraction of the lobe height) below its saddle
+# The bottom edge must actually undulate — vary by at least _TIP_MIN_RELIEF of the strand's full height —
+# before we look for tips at all. A flat rectangle bottom varies only by float noise (~1e-16), and
+# dividing prominence by that noise turned rounding wobble into spurious tips that split a clean lobe
+# differently on Python 3.10 vs 3.12. This absolute floor (vs the stable strand height) gates that out;
+# once the edge genuinely undulates, tip PROMINENCE is measured against its own relief, so a shallow but
+# real set of locks still splits.
+_TIP_MIN_RELIEF = 0.06       # bottom-edge undulation, as a fraction of strand height, to look for tips
+_TIP_MIN_PROMINENCE = 0.18   # a tip must dip this far (fraction of the bottom-edge relief) below saddle
 _TIP_MIN_SEPARATION = 6      # bins two tips must be apart — merges locks that are basically one
 _TIP_MAX = 6                 # never more than this many strands from one lobe
 
@@ -153,21 +160,26 @@ def _smooth_filled(contour: list[float | None]) -> list[float]:
     return out
 
 
-def _tip_bins(contour: list[float]) -> list[int]:
+def _tip_bins(contour: list[float], ref_height: float) -> list[int]:
     """Bins that are prominent local maxima (hair tips) of the smoothed bottom contour: a peak whose
-    drop to the higher of its flanking valleys is at least ``_TIP_MIN_PROMINENCE`` of the contour's
-    total height. Peaks closer than ``_TIP_MIN_SEPARATION`` bins are merged (the lower one drops)."""
+    drop to the higher of its flanking valleys is at least ``_TIP_MIN_PROMINENCE`` of ``ref_height``
+    (the lobe's full top-to-bottom height). Peaks closer than ``_TIP_MIN_SEPARATION`` bins are merged.
+
+    A flat bottom edge (relief below ``_TIP_MIN_RELIEF`` of ``ref_height``) yields no tips regardless of
+    its float-noise range — see the constant's note. Once the edge undulates, prominence is measured
+    against that relief so a shallow-but-real set of locks still splits."""
     lo, hi = min(contour), max(contour)
-    height = hi - lo
-    if height <= 0:
+    relief = hi - lo
+    if ref_height <= 0 or relief < _TIP_MIN_RELIEF * ref_height:
         return []
+    min_prom = _TIP_MIN_PROMINENCE * relief
     peaks = [i for i in range(1, len(contour) - 1)
              if contour[i] >= contour[i - 1] and contour[i] > contour[i + 1]]
     prominent = []
     for i in peaks:
         left = min(contour[:i]) if i else contour[i]
         right = min(contour[i + 1:]) if i + 1 < len(contour) else contour[i]
-        if (contour[i] - max(left, right)) >= _TIP_MIN_PROMINENCE * height:
+        if (contour[i] - max(left, right)) >= min_prom:
             prominent.append(i)
     # merge near-duplicates, keeping the lower-hanging (larger y) tip
     prominent.sort()
@@ -190,11 +202,13 @@ def split_lobe_by_tips(mesh: Mesh, indices: list[int]) -> list[list[int]]:
     tip in x, so each lock owns a contiguous slice of the sheet."""
     verts = [mesh.vertices[i] for i in indices]
     xs = [x for x, _ in verts]
+    ys = [y for _, y in verts]
     x0, x1 = min(xs), max(xs)
     span = x1 - x0
+    lobe_height = max(ys) - min(ys)
     if span <= 1e-6 or len(indices) < 2 * _TIP_MIN_SEPARATION:
         return [indices]
-    tip_bins = _tip_bins(_smooth_filled(_bottom_contour(verts, x0, span)))
+    tip_bins = _tip_bins(_smooth_filled(_bottom_contour(verts, x0, span)), lobe_height)
     if len(tip_bins) < 2:
         return [indices]
     tip_xs = [x0 + (b + 0.5) / _TIP_BINS * span for b in tip_bins]

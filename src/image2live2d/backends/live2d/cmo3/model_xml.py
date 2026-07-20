@@ -35,6 +35,10 @@ from ....irr.schema import DeformerType, Rig, Texture
 # which parameters drive a part, the per-vertex offset at a key, opacity keying, and the cap on how many
 # params may drive one mesh (keyforms per mesh = product of their key counts). See :mod:`..moc3_emit`.
 from ..moc3_emit import _affecting_params, _offset_at, _opacity_at, _opacity_params
+# Reuse the physics3.json emitter's semantics so a .cmo3's editor physics matches the runtime physics we
+# ship: the same input type per driver (translate vs gravity-angle vs dropped), the same pendulum
+# vertices, and the same normalization ranges. See :mod:`..physics3`.
+from ..physics3 import _INPUT_WEIGHT, _NORM, _OUTPUT_WEIGHT, _input_type, _vertices
 
 # --- Well-known UUIDs the Editor compares by literal equality --------------------------------------
 # The root deformer and root parameter group are referenced by these exact UUIDs; the two filter-def
@@ -52,10 +56,10 @@ _VERSION_PIS = [
     ("KeyformGridSource", "1"),
     ("CParameterGroup", "4"),
     ("SerializeFormatVersion", "2"),
-    # Deformers do NOT require a CModelSource bump — they live in CDeformerSourceSet, a separate class
-    # the v4 reader already parses (Phase 1 emitted it empty). The rival bumps to CModelSource:14 only to
-    # enable *physics* (physicsSettingsSourceSet), which drags in mandatory rootParameterGroup/modelOptions/
-    # gameMotionSet fields; that bump belongs to Phase 4, not here. Staying on v4 keeps this MVE minimal.
+    # CModelSource version is chosen per-rig in build_main_xml: 4 by default, 14 when the rig has physics
+    # (only v14 parses physicsSettingsSourceSet). The v14 bump drags in mandatory rootParameterGroup /
+    # modelOptions / preview-icon / gameMotionSet fields, all emitted in the v14 tail below. The value
+    # here is a placeholder; build_main_xml overrides it.
     ("CModelSource", "4"),
     ("CFloatColor", "1"),
     ("CLabelColor", "0"),
@@ -180,6 +184,25 @@ _IMPORT_PIS = [
     "com.live2d.type.GEditableMeshGuid",
     "com.live2d.type.GTextureGuid",
     "com.live2d.type.StaticFilterDefGuid",
+    # --- physics + the CModelSource:14 tail (Phase 4). Emitted only for rigs that carry physics; import
+    # order is irrelevant to the reader, but a class that is *emitted* without its import is a fatal
+    # ClassNotFoundException, so every v14 class we can emit is registered here.
+    "com.live2d.cubism.doc.gameData.motions.CGameMotionSet",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsController$CPhysicsSourceType",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsInput",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsOutput",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsSettingsSource",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsSettingsSourceSet",
+    "com.live2d.cubism.doc.gameData.physics.CPhysicsVertex",
+    "com.live2d.cubism.doc.model.CEffectParameterGroups",
+    "com.live2d.cubism.doc.model.drawable.artPath.Line.CArtPathBrushSetting",
+    "com.live2d.cubism.doc.model.id.CParameterGroupId",
+    "com.live2d.cubism.doc.model.id.CPhysicsSettingId",
+    "com.live2d.cubism.doc.model.randomPose.CRandomPoseSettingManager",
+    "com.live2d.cubism.doc.modeling.ui.guide.CGuidesSetting",
+    "com.live2d.cubism.doc.modeling.ui.viewer.ModelViewerSetting",
+    "com.live2d.type.CPhysicsDataGuid",
+    "com.live2d.type.CPhysicsSettingsGuid",
 ]
 
 _IDENTITY_AFFINE = dict(m00="1.0", m01="0.0", m02="0.0", m10="0.0", m11="1.0", m12="0.0")
@@ -417,6 +440,15 @@ def build_main_xml(
         sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawable_refs, deformer_child_refs,
         ref_part_form)
 
+    # Physics needs CModelSource:14, which requires a real root parameter-group entity (v4 got away with a
+    # bare guid + empty group set). Build it only on the physics path so physics-less rigs stay on the
+    # validated v4 graph unchanged.
+    has_physics = bool(rig.physics)
+    ref_root_pg = None
+    if has_physics:
+        ref_root_pg = _build_root_param_group(sh, ref_param_group, param_guid_ref, rig)
+        texture_files = texture_files + _icon_files()
+
     # ---- assemble main.xml -----------------------------------------------------------------------
     root = _e("root", fileFormatVersion="402030000")
     shared_el = _sub(root, "shared")
@@ -426,10 +458,12 @@ def build_main_xml(
     main_el = _sub(root, "main")
     _build_model_source(
         main_el, rig, ref_model, canvas_w, canvas_h, ref_param_group, param_guid_ref, mesh_refs,
-        ref_part_src, ref_li, ref_img_grp, deformer_sources)
+        ref_part_src, ref_li, ref_img_grp, deformer_sources, ref_root_pg)
 
+    model_version = "14" if has_physics else "4"
+    version_pis = [(n, model_version if n == "CModelSource" else v) for n, v in _VERSION_PIS]
     pi_lines = ['<?xml version="1.0" encoding="UTF-8"?>']
-    pi_lines += [f"<?version {n}:{v}?>" for n, v in _VERSION_PIS]
+    pi_lines += [f"<?version {n}:{v}?>" for n, v in version_pis]
     pi_lines += [f"<?import {imp}?>" for imp in _IMPORT_PIS]
     xml_body = ET.tostring(root, encoding="unicode")
     full = "\n".join(pi_lines) + "\n" + xml_body
@@ -1103,7 +1137,7 @@ def _build_root_part(sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawabl
 
 def _build_model_source(
     main_el, rig, ref_model, canvas_w, canvas_h, ref_param_group, param_guid_ref, mesh_refs,
-    ref_part_src, ref_li, ref_img_grp, deformer_sources,
+    ref_part_src, ref_li, ref_img_grp, deformer_sources, ref_root_pg,
 ) -> None:
     model = _sub(main_el, "CModelSource", isDefaultKeyformLocked="true")
     _sub(model, "CModelGuid", xs__n="guid", xs__ref=ref_model)
@@ -1153,16 +1187,35 @@ def _build_model_source(
     part_set = _sub(model, "CPartSourceSet", xs__n="partSourceSet")
     psrc = _sub(part_set, "carray_list", xs__n="_sources", count="1")
     _sub(psrc, "CPartSource", xs__ref=ref_part_src)
+
+    # Physics (Phase 4): pendulum settings driving hair/skirt output params. Only parsed at
+    # CModelSource:14, so this appears only alongside the v14 tail below (ref_root_pg is set).
+    if rig.physics:
+        _build_physics(model, rig, param_guid_ref)
+
     _sub(model, "CPartSource", xs__n="rootPart", xs__ref=ref_part_src)
 
     pg_set = _sub(model, "CParameterGroupSet", xs__n="parameterGroupSet")
-    _sub(pg_set, "carray_list", xs__n="_groups", count="0")
+    if ref_root_pg is not None:
+        groups = _sub(pg_set, "carray_list", xs__n="_groups", count="1")
+        _sub(groups, "CParameterGroup", xs__ref=ref_root_pg)
+    else:
+        _sub(pg_set, "carray_list", xs__n="_groups", count="0")
+
+    if ref_root_pg is not None:  # v14 requires the rootParameterGroup pointer (entity ref, not guid)
+        _sub(model, "CParameterGroup", xs__n="rootParameterGroup", xs__ref=ref_root_pg)
 
     mi_info = _sub(model, "CModelInfo", xs__n="modelInfo")
     _text(mi_info, "f", "1.0", xs__n="pixelsPerUnit")
     origin = _sub(mi_info, "CPoint", xs__n="originInPixels")
     _text(origin, "i", "0", xs__n="x")
     _text(origin, "i", "0", xs__n="y")
+    if ref_root_pg is not None:  # v14 required inner collection
+        epg = _sub(mi_info, "CEffectParameterGroups", xs__n="_effectParameterGroups")
+        _sub(epg, "hash_map", xs__n="_parameterGroups", count="0", keyType="string")
+
+    if ref_root_pg is not None:
+        _v14_tail(model)
 
     _text(model, "i", "3000", xs__n="targetVersionNo")
     _text(model, "i", "5000000", xs__n="latestVersionOfLastModelerNo")
@@ -1183,3 +1236,141 @@ def _param_source(parent, param, ref_param_group, ref_guid) -> None:
     _text(ps, "s", "", xs__n="description")
     _text(ps, "b", "false", xs__n="combined")
     _sub(ps, "CParameterGroupGuid", xs__n="parentGroupGuid", xs__ref=ref_param_group)
+
+
+# --- physics + the CModelSource:14 tail (Phase 4) --------------------------------------------------
+
+def _build_root_param_group(sh, ref_param_group_guid, param_guid_ref, rig) -> str:
+    """The root ``CParameterGroup`` *entity* v14 requires (v4 got by with just the guid + an empty group
+    set). A flat tree: every parameter is a direct child. Returns its shared ref."""
+    group, ref = sh.add("CParameterGroup")
+    _text(group, "s", "Root Parameter Group", xs__n="name")
+    _text(group, "s", "", xs__n="description")
+    _text(group, "b", "false", xs__n="folderIsOpened")
+    _sub(group, "CParameterGroupGuid", xs__n="guid", xs__ref=ref_param_group_guid)
+    _sub(group, "null", xs__n="parentGroupGuid")
+    children = _sub(group, "carray_list", xs__n="_childGuids", count=str(len(rig.parameters)))
+    for p in rig.parameters:
+        _sub(children, "CParameterGuid", xs__ref=param_guid_ref[p.id])
+    _sub(group, "CParameterGroupId", xs__n="id", idstr="ParamGroupRoot")
+    for ch, val in (("Red", "1.0"), ("Green", "1.0"), ("Blue", "1.0"), ("Alpha", "1.0")):
+        _text(group, "f", val, xs__n=f"visibilityColor{ch}")
+    return ref
+
+
+def _build_physics(model, rig, param_guid_ref) -> None:
+    """Emit ``physicsSettingsSourceSet`` — one ``CPhysicsSettingsSource`` per IRR ``PhysicsRig``."""
+    pset = _sub(model, "CPhysicsSettingsSourceSet", xs__n="physicsSettingsSourceSet")
+    plist = _sub(pset, "carray_list", xs__n="_sourceCubismPhysics", count=str(len(rig.physics)))
+    for i, ph in enumerate(rig.physics, start=1):
+        _build_physics_setting(plist, ph, i, param_guid_ref)
+    _sub(pset, "CPhysicsSettingsGuid", xs__n="selectedCubismPhysics", uuid=_new_uuid(), note="selection")
+    _sub(pset, "null", xs__n="settingFPS")
+
+
+def _build_physics_setting(plist, ph, idx, param_guid_ref) -> None:
+    """One pendulum: inputs from the drivers (translate/gravity-angle, dropping inert ones), a single
+    output tapping the swinging tip, the vertex chain, and the normalization ranges — all mirroring
+    :mod:`..physics3` so the editor physics matches the shipped physics3.json."""
+    src = _sub(plist, "CPhysicsSettingsSource")
+    _text(src, "s", ph.output_param, xs__n="name")
+    _sub(src, "CPhysicsSettingsGuid", xs__n="guid", uuid=_new_uuid(), note=ph.output_param)
+    _sub(src, "CPhysicsSettingId", xs__n="id", idstr=f"PhysicsSetting{idx}")
+
+    # One input per driver that can actually swing a pendulum; "X" -> SRC_TO_X (translate), "Angle" ->
+    # SRC_TO_G_ANGLE (tip gravity), None -> dropped (a Y translation is a no-op for an angle output).
+    inputs = [(d, "SRC_TO_X" if t == "X" else "SRC_TO_G_ANGLE")
+              for d in ph.all_drivers() if (t := _input_type(d, pitch_angle=ph.pitch_angle))]
+    inode = _sub(src, "carray_list", xs__n="inputs", count=str(len(inputs)))
+    for d, src_type in inputs:
+        inp = _sub(inode, "CPhysicsInput")
+        _sub(inp, "CPhysicsDataGuid", xs__n="guid", uuid=_new_uuid(), note=f"in_{d}")
+        _sub(inp, "CParameterGuid", xs__n="source", xs__ref=param_guid_ref[d])
+        _text(inp, "f", "0.0", xs__n="angleScale")
+        ts = _sub(inp, "GVector2", xs__n="translationScale")
+        _text(ts, "f", "0.0", xs__n="x")
+        _text(ts, "f", "0.0", xs__n="y")
+        _text(inp, "f", f"{_INPUT_WEIGHT:.1f}", xs__n="weight")
+        _sub(inp, "CPhysicsSourceType", xs__n="type", v=src_type)
+        _text(inp, "b", "false", xs__n="isReverse")
+
+    verts = _vertices(ph.mass, ph.drag, ph.length)
+    onode = _sub(src, "carray_list", xs__n="outputs", count="1")
+    out = _sub(onode, "CPhysicsOutput")
+    _sub(out, "CPhysicsDataGuid", xs__n="guid", uuid=_new_uuid(), note=f"out_{ph.output_param}")
+    _sub(out, "CParameterGuid", xs__n="destination", xs__ref=param_guid_ref[ph.output_param])
+    _text(out, "i", str(len(verts) - 1), xs__n="vertexIndex")  # the swinging tip (0-based)
+    ots = _sub(out, "GVector2", xs__n="translationScale")
+    _text(ots, "f", "0.0", xs__n="x")
+    _text(ots, "f", "0.0", xs__n="y")
+    scale = 1.4 if ph.output_param.startswith("ParamHair") else 1.0
+    _text(out, "f", f"{scale:.1f}", xs__n="angleScale")
+    _text(out, "f", f"{_OUTPUT_WEIGHT:.1f}", xs__n="weight")
+    _sub(out, "CPhysicsSourceType", xs__n="type", v="SRC_TO_G_ANGLE")
+    _text(out, "b", "false", xs__n="isReverse")
+
+    vnode = _sub(src, "carray_list", xs__n="vertices", count=str(len(verts)))
+    for j, vd in enumerate(verts):
+        v = _sub(vnode, "CPhysicsVertex")
+        _sub(v, "CPhysicsDataGuid", xs__n="guid", uuid=_new_uuid(), note=f"v{j}")
+        pos = _sub(v, "GVector2", xs__n="position")
+        _text(pos, "f", f"{vd['Position']['X']:.4f}", xs__n="x")
+        _text(pos, "f", f"{vd['Position']['Y']:.4f}", xs__n="y")
+        _text(v, "f", f"{vd['Mobility']:.4f}", xs__n="mobility")
+        _text(v, "f", f"{vd['Delay']:.4f}", xs__n="delay")
+        _text(v, "f", f"{vd['Acceleration']:.4f}", xs__n="acceleration")
+        _text(v, "f", f"{vd['Radius']:.4f}", xs__n="radius")
+
+    pos_n, ang_n = _NORM["Position"], _NORM["Angle"]
+    _text(src, "f", f"{pos_n['Maximum']:.1f}", xs__n="normalizedPositionValueMax")
+    _text(src, "f", f"{pos_n['Minimum']:.1f}", xs__n="normalizedPositionValueMin")
+    _text(src, "f", f"{pos_n['Default']:.1f}", xs__n="normalizedPositionDefaultValue")
+    _text(src, "f", f"{ang_n['Maximum']:.1f}", xs__n="normalizedAngleValueMax")
+    _text(src, "f", f"{ang_n['Minimum']:.1f}", xs__n="normalizedAngleValueMin")
+    _text(src, "f", f"{ang_n['Default']:.1f}", xs__n="normalizedAngleDefaultValue")
+
+
+_ICON_SPECS = (("_icon64", 64, "cmo3_icon_64.png"), ("_icon32", 32, "cmo3_icon_32.png"),
+               ("_icon16", 16, "cmo3_icon_16.png"))
+
+
+def _v14_tail(model) -> None:
+    """The remaining fields the CModelSource:14 reader dereferences (or NPEs). All empty stubs except the
+    preview-icon references, whose PNGs :func:`_icon_files` adds to the archive."""
+    for field, size, path in _ICON_SPECS:
+        icon = _sub(model, "CImageIcon", xs__n=field)
+        img = _sub(icon, "CWritableImage", xs__n="image", width=str(size), height=str(size),
+                   type="INT_ARGB")
+        _sub(img, "file", xs__n="image", path=path)
+    _sub(model, "hash_map", xs__n="modelOptions", count="0", keyType="string")
+    gms = _sub(model, "CGameMotionSet", xs__n="gameMotionSet")
+    _sub(gms, "carray_list", xs__n="gameMotions", count="0")
+    _sub(gms, "carray_list", xs__n="gameMotionGroups", count="0")
+    mvs = _sub(model, "ModelViewerSetting", xs__n="modelViewerSetting")
+    _sub(mvs, "array_list", xs__n="trackCursorSettings", count="0")
+    guides = _sub(model, "CGuidesSetting", xs__n="guides")
+    _sub(guides, "carray_list", xs__n="guidesModeling", count="0")
+    brush = _sub(model, "CArtPathBrushSetting", xs__n="artPathBrushesSetting")
+    _sub(brush, "carray_list", xs__n="brushes", count="0")
+    rp = _sub(model, "CRandomPoseSettingManager", xs__n="randomPoseSetting")
+    _sub(rp, "array_list", xs__n="_settings", count="0")
+    _text(rp, "i", "0", xs__n="currentIndex")
+
+
+def _icon_files() -> list[tuple[str, bytes]]:
+    """The blank preview-icon PNGs the v14 ``CImageIcon`` fields reference, for the CAFF archive."""
+    return [(path, _blank_png(size, size)) for _, size, path in _ICON_SPECS]
+
+
+def _blank_png(w: int, h: int) -> bytes:
+    """A minimal transparent RGBA PNG (stdlib only)."""
+    import struct
+    import zlib
+
+    def chunk(ctype: bytes, data: bytes) -> bytes:
+        body = ctype + data
+        return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body) & 0xFFFFFFFF)
+
+    ihdr = chunk(b"IHDR", struct.pack(">IIBBBBB", w, h, 8, 6, 0, 0, 0))
+    raw = (b"\x00" + b"\x00\x00\x00\x00" * w) * h
+    return b"\x89PNG\r\n\x1a\n" + ihdr + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")

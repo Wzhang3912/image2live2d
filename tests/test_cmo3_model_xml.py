@@ -20,7 +20,8 @@ from image2live2d.backends.live2d.cmo3.model_xml import (
     build_main_xml,
 )
 from image2live2d.irr.schema import (
-    Deformer, DeformerType, Keyform, Mesh, Meta, Parameter, Part, Rig, SemanticRole, Texture,
+    Deformer, DeformerType, Keyform, Mesh, Meta, Parameter, Part, PhysicsRig, Rig, SemanticRole,
+    Texture,
 )
 
 
@@ -112,6 +113,25 @@ def _deformer_rig():
         Keyform(value=30, deformer_offsets={"warp_head": [(0.05, 0.0)] * 4})])
     return Rig(meta=Meta(name="Deformers"), textures=textures, parts=parts, meshes=meshes,
                deformers=deformers, parameters=[angle])
+
+
+def _physics_rig():
+    """A rig with physics (Phase 4): a hair pendulum driven by yaw (translate) + roll (gravity-angle),
+    whose output is a hair param. Physics forces the CModelSource:14 graph."""
+    q = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)]
+    tris = [(0, 1, 2), (0, 2, 3)]
+    textures = [Texture(id="tex", path="tex.png", width=256, height=256)]
+    parts = [Part(id="hair", semantic_role=SemanticRole.hair_front, texture_id="tex", draw_order=0)]
+    meshes = [Mesh(part_id="hair", vertices=q, uvs=q, triangles=tris)]
+    params = [
+        Parameter(id="ParamAngleX", min=-30, max=30, default=0),
+        Parameter(id="ParamAngleZ", min=-30, max=30, default=0),
+        Parameter(id="ParamHairFront", min=-10, max=10, default=0),
+    ]
+    physics = [PhysicsRig(id="phys_hair", driver_param="ParamAngleX", output_param="ParamHairFront",
+                          extra_drivers=["ParamAngleZ"])]
+    return Rig(meta=Meta(name="Phys"), textures=textures, parts=parts, meshes=meshes,
+               parameters=params, physics=physics)
 
 
 def _deformer_named(shared, tag):
@@ -430,3 +450,86 @@ def test_deformer_rig_refs_resolve_and_pack():
     assert "warp.CWarpDeformerSource" in xml
     assert "<?version CModelSource:4?>" in xml
     assert unpack_caff(rig_to_cmo3(_deformer_rig(), asset_root=None))
+
+
+# --- Phase 4: physics + the CModelSource:14 tail ---------------------------------------------------
+
+def test_physics_bumps_model_to_v14():
+    xml, _, _, _, _ = _parse_shared(_physics_rig())
+    assert "<?version CModelSource:14?>" in xml
+    assert "<?version CModelSource:4?>" not in xml
+
+
+def test_physics_settings_source_set():
+    _, _, _, main, _ = _parse_shared(_physics_rig())
+    pset = main.find("CModelSource/CPhysicsSettingsSourceSet[@xs.n='physicsSettingsSourceSet']")
+    assert pset is not None
+    srcs = pset.find("carray_list[@xs.n='_sourceCubismPhysics']")
+    assert srcs.get("count") == "1"
+    setting = srcs.find("CPhysicsSettingsSource")
+    assert setting.find("s[@xs.n='name']").text == "ParamHairFront"
+
+
+def test_physics_inputs_and_output_reference_shared_param_guids():
+    _, _, shared, main, _ = _parse_shared(_physics_rig())
+    byid = _shared_by_id(shared)
+    setting = main.find("CModelSource/CPhysicsSettingsSourceSet/carray_list/CPhysicsSettingsSource")
+    inputs = setting.find("carray_list[@xs.n='inputs']")
+    assert inputs.get("count") == "2"  # yaw (translate) + roll (gravity-angle); pitch would be dropped
+    src_notes = {byid[i.find("CParameterGuid[@xs.n='source']").get("xs.ref")].get("note")
+                 for i in inputs.findall("CPhysicsInput")}
+    assert src_notes == {"ParamAngleX", "ParamAngleZ"}
+    types = {i.find("CPhysicsSourceType[@xs.n='type']").get("v") for i in inputs.findall("CPhysicsInput")}
+    assert types == {"SRC_TO_X", "SRC_TO_G_ANGLE"}
+    out = setting.find("carray_list[@xs.n='outputs']/CPhysicsOutput")
+    dest = byid[out.find("CParameterGuid[@xs.n='destination']").get("xs.ref")].get("note")
+    assert dest == "ParamHairFront"
+
+
+def test_physics_vertices_and_tip_output():
+    _, _, _, main, _ = _parse_shared(_physics_rig())
+    setting = main.find("CModelSource/CPhysicsSettingsSourceSet/carray_list/CPhysicsSettingsSource")
+    verts = setting.find("carray_list[@xs.n='vertices']")
+    assert verts.get("count") == "2"  # fixed root + swinging tip
+    out = setting.find("carray_list[@xs.n='outputs']/CPhysicsOutput")
+    assert out.find("i[@xs.n='vertexIndex']").text == "1"  # 0-based tip = len(verts) - 1
+
+
+def test_v14_mandatory_tail_present():
+    _, _, shared, main, _ = _parse_shared(_physics_rig())
+    byid = _shared_by_id(shared)
+    model = main.find("CModelSource")
+    # root parameter group entity: referenced by both rootParameterGroup and the group set
+    rpg_ref = model.find("CParameterGroup[@xs.n='rootParameterGroup']").get("xs.ref")
+    assert byid[rpg_ref].tag == "CParameterGroup"
+    assert model.find("CParameterGroupSet/carray_list[@xs.n='_groups']").get("count") == "1"
+    assert model.find("CModelInfo/CEffectParameterGroups[@xs.n='_effectParameterGroups']") is not None
+    assert model.find("hash_map[@xs.n='modelOptions']") is not None
+    for field in ("_icon64", "_icon32", "_icon16"):
+        assert model.find(f"CImageIcon[@xs.n='{field}']") is not None
+    assert model.find("CGameMotionSet[@xs.n='gameMotionSet']") is not None
+    assert model.find("ModelViewerSetting[@xs.n='modelViewerSetting']") is not None
+    assert model.find("CRandomPoseSettingManager[@xs.n='randomPoseSetting']") is not None
+
+
+def test_physics_rig_refs_resolve_and_packs_icons():
+    xml, root, shared, _, _ = _parse_shared(_physics_rig())
+    ids = {o.get("xs.id") for o in shared}
+    dangling = sorted({el.get("xs.ref") for el in root.iter()
+                       if el.get("xs.ref") is not None} - ids)
+    assert not dangling, f"dangling xs.ref: {dangling}"
+    entries = unpack_caff(rig_to_cmo3(_physics_rig(), asset_root=None))
+    paths = {e.path for e in entries}
+    for sz in (16, 32, 64):
+        assert f"cmo3_icon_{sz}.png" in paths  # v14 preview icons packed
+    assert "main.xml" in paths
+
+
+def test_no_physics_stays_v4_without_icons():
+    # The v14 surface must NOT leak into physics-less rigs — they stay on the validated v4 graph.
+    xml, _, _, main, _ = _parse_shared(_rig())
+    assert "<?version CModelSource:4?>" in xml
+    assert main.find("CModelSource/CPhysicsSettingsSourceSet") is None
+    assert main.find("CModelSource/CParameterGroup[@xs.n='rootParameterGroup']") is None
+    entries = unpack_caff(rig_to_cmo3(_rig(), asset_root=None))
+    assert not any(e.path.startswith("cmo3_icon") for e in entries)

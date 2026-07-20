@@ -52,6 +52,62 @@ def _parse_shared(rig):
     return xml, root, root.find("shared"), root.find("main"), files
 
 
+def _deform_rig():
+    """A rig whose parameters actually deform parts (Phase 2): an ``eye`` driven by one parameter (with a
+    keyed opacity fade), and a ``face`` driven by two parameters (a 3x3 keyform grid)."""
+    q = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)]
+    tris = [(0, 1, 2), (0, 2, 3)]
+    textures = [Texture(id="tex", path="tex.png", width=256, height=256)]
+    parts = [
+        Part(id="eye", semantic_role=SemanticRole.eye_l, texture_id="tex", draw_order=1),
+        Part(id="face", semantic_role=SemanticRole.face_base, texture_id="tex", draw_order=0),
+    ]
+    meshes = [
+        Mesh(part_id="eye", vertices=q, uvs=q, triangles=tris),
+        Mesh(part_id="face", vertices=q, uvs=q, triangles=tris),
+    ]
+    z = [(0.0, 0.0)] * 4
+    eye = Parameter(id="ParamEyeLOpen", min=0, max=1, default=1, keyforms=[
+        Keyform(value=0, mesh_offsets={"eye": [(0, 0.1), (0, 0.1), (0, -0.1), (0, -0.1)]},
+                opacity_overrides={"eye": 0.0}),
+        Keyform(value=1, mesh_offsets={"eye": z}, opacity_overrides={"eye": 1.0})])
+    dx = [(0.05, 0.0)] * 4
+    ndx = [(-0.05, 0.0)] * 4
+    angle_x = Parameter(id="ParamAngleX", min=-30, max=30, default=0, keyforms=[
+        Keyform(value=-30, mesh_offsets={"face": ndx}),
+        Keyform(value=0, mesh_offsets={"face": z}),
+        Keyform(value=30, mesh_offsets={"face": dx})])
+    dy = [(0.0, 0.05)] * 4
+    ndy = [(0.0, -0.05)] * 4
+    angle_y = Parameter(id="ParamAngleY", min=-30, max=30, default=0, keyforms=[
+        Keyform(value=-30, mesh_offsets={"face": ndy}),
+        Keyform(value=0, mesh_offsets={"face": z}),
+        Keyform(value=30, mesh_offsets={"face": dy})])
+    return Rig(meta=Meta(name="Deform"), textures=textures, parts=parts, meshes=meshes,
+               parameters=[eye, angle_x, angle_y])
+
+
+def _shared_by_id(shared):
+    return {o.get("xs.id"): o for o in shared}
+
+
+def _mesh_named(shared, name):
+    for o in shared:
+        if o.tag == "CArtMeshSource":
+            ln = o.find("ACDrawableSource/ACParameterControllableSource/s[@xs.n='localName']")
+            if ln is not None and ln.text == name:
+                return o
+    raise AssertionError(f"no CArtMeshSource named {name!r}")
+
+
+def _grid_of(shared, name):
+    byid = _shared_by_id(shared)
+    ref = _mesh_named(shared, name).find(
+        "ACDrawableSource/ACParameterControllableSource/"
+        "KeyformGridSource[@xs.n='keyformGridSource']").get("xs.ref")
+    return byid[ref]
+
+
 def test_every_xs_ref_resolves():
     _, root, shared, _, _ = _parse_shared(_rig(3))
     ids = {o.get("xs.id") for o in shared}
@@ -163,3 +219,84 @@ def test_empty_rig_rejected():
     # part p0 has no mesh -> no drawables
     with pytest.raises(ValueError, match="no drawable parts"):
         rig_to_cmo3(rig, asset_root=None)
+
+
+# --- Phase 2: keyform bindings (parameters actually deform the mesh) --------------------------------
+
+def test_single_param_grid_has_one_cell_per_key():
+    # ParamEyeLOpen has 2 keyforms -> 2 grid cells, 1 binding, 2 CArtMeshForms.
+    _, _, shared, _, _ = _parse_shared(_deform_rig())
+    grid = _grid_of(shared, "eye")
+    assert grid.find("array_list[@xs.n='keyformsOnGrid']").get("count") == "2"
+    assert grid.find("array_list[@xs.n='keyformBindings']").get("count") == "1"
+    kis = sorted(k.text for k in grid.iter("i") if k.get("xs.n") == "keyIndex")
+    assert kis == ["0", "1"]
+    keyforms = _mesh_named(shared, "eye").find("carray_list[@xs.n='keyforms']")
+    assert keyforms.get("count") == "2"
+    assert len(keyforms.findall("CArtMeshForm")) == 2
+
+
+def test_binding_references_shared_param_guid_and_real_keys():
+    # The binding's parameterGuid must be the same shared guid the CParameterSource uses, and its keys
+    # must be the parameter's sorted keyform values.
+    _, _, shared, main, _ = _parse_shared(_deform_rig())
+    byid = _shared_by_id(shared)
+    grid = _grid_of(shared, "eye")
+    binding_ref = grid.find("array_list[@xs.n='keyformBindings']/KeyformBindingSource").get("xs.ref")
+    binding = byid[binding_ref]
+    guid_ref = binding.find("CParameterGuid[@xs.n='parameterGuid']").get("xs.ref")
+    assert byid[guid_ref].get("note") == "ParamEyeLOpen"  # the shared guid for that parameter
+    keys = [f.text for f in binding.find("array_list[@xs.n='keys']")]
+    assert [float(k) for k in keys] == [0.0, 1.0]
+    # same guid object the source references (Phase 1 invariant still holds through Phase 2)
+    src_guid = main.find("CModelSource/CParameterSourceSet/carray_list/CParameterSource/"
+                         "CParameterGuid").get("xs.ref")
+    assert byid[src_guid].get("note") in {"ParamEyeLOpen", "ParamAngleX", "ParamAngleY"}
+
+
+def test_keyed_opacity_bakes_into_forms():
+    # The eye fades: closed keyform opacity 0.0, open 1.0 -> the two forms carry those opacities.
+    _, _, shared, _, _ = _parse_shared(_deform_rig())
+    keyforms = _mesh_named(shared, "eye").find("carray_list[@xs.n='keyforms']")
+    opac = sorted(float(f.find("ACDrawableForm/f[@xs.n='opacity']").text)
+                  for f in keyforms.findall("CArtMeshForm"))
+    assert opac == pytest.approx([0.0, 1.0])
+
+
+def test_deformation_actually_moves_vertices():
+    # The closed-eye form must differ from the open (rest) form — offsets are baked, not dropped.
+    _, _, shared, _, _ = _parse_shared(_deform_rig())
+    forms = _mesh_named(shared, "eye").find("carray_list[@xs.n='keyforms']").findall("CArtMeshForm")
+    pos = [tuple(float(v) for v in f.find("float-array[@xs.n='positions']").text.split())
+           for f in forms]
+    assert pos[0] != pos[1]
+    # cell order is keyIndex-ascending, so form 0 is the closed key (value 0): vertex-0 y is the rest
+    # 0.2*256 shifted by the +0.1 offset, in canvas pixels; form 1 (open, value 1) is the undeformed rest.
+    assert pos[0][1] == pytest.approx(0.2 * 256 + 0.1 * 256)
+    assert pos[1][1] == pytest.approx(0.2 * 256)
+
+
+def test_multi_param_grid_is_cartesian_product():
+    # face is driven by ParamAngleX (3) and ParamAngleY (3) -> a 9-cell grid, 2 bindings, each access
+    # key naming both bindings.
+    _, _, shared, _, _ = _parse_shared(_deform_rig())
+    grid = _grid_of(shared, "face")
+    assert grid.find("array_list[@xs.n='keyformsOnGrid']").get("count") == "9"
+    assert grid.find("array_list[@xs.n='keyformBindings']").get("count") == "2"
+    for kog in grid.find("array_list[@xs.n='keyformsOnGrid']").findall("KeyformOnGrid"):
+        kop = kog.find("KeyformGridAccessKey/array_list[@xs.n='_keyOnParameterList']")
+        assert kop.get("count") == "2"  # one KeyOnParameter per bound parameter
+        assert len(kop.findall("KeyOnParameter")) == 2
+    assert len(_mesh_named(shared, "face").find("carray_list[@xs.n='keyforms']")
+               .findall("CArtMeshForm")) == 9
+
+
+def test_deform_rig_refs_all_resolve_and_pack():
+    # Bindings/forms add many cross-links; none may dangle, and the whole thing still packs.
+    xml, root, shared, _, _ = _parse_shared(_deform_rig())
+    ids = {o.get("xs.id") for o in shared}
+    dangling = sorted({el.get("xs.ref") for el in root.iter()
+                       if el.get("xs.ref") is not None} - ids)
+    assert not dangling, f"dangling xs.ref: {dangling}"
+    data = rig_to_cmo3(_deform_rig(), asset_root=None)
+    assert unpack_caff(data)  # round-trips through the CAFF container

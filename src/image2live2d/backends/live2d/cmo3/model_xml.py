@@ -7,12 +7,16 @@ tagged ``xs.id="#N"``) followed by a ``<main>`` ``CModelSource`` that wires them
 fields default to null/0 — but a fixed set of collections must be present or it throws, and four
 built-in UUIDs must be exact literals (see :data:`DEFORMER_ROOT` etc.) or features silently break.
 
-**Phase 1 scope (this module).** A static, openable model: every drawable part becomes one
+**Scope (this module).** An openable, *deformable* model: every drawable part becomes one
 ``CArtMeshSource`` with its real geometry, UVs and texture, all hung under a single root ``CPartSource``.
-Parameters are emitted (so the Editor lists them) but drive no deformation yet — keyforms are Phase 2.
-Textures use Cubism 5's *ModelImage* pipeline: each part is one canvas-sized ``CLayer`` inside a single
-``CLayeredImage`` (a synthetic PSD), rendered through a per-mesh filter graph. This mirrors, mesh for
-mesh, the reverse-engineering reference that is confirmed to open in Cubism Editor 5.0.
+Parameters that key a part (via the IRR's per-vertex ``mesh_offsets`` / ``opacity_overrides``) are bound
+to it through a keyform grid (Phase 2): each driving parameter is a ``KeyformBindingSource`` axis, and
+the mesh carries one ``CArtMeshForm`` per grid cell (the cartesian product of the axes' keys) holding
+that cell's deformed positions and opacity. A part no parameter drives keeps a single rest form.
+Deformers (warps/rotations) and physics are later phases. Textures use Cubism 5's *ModelImage* pipeline:
+each part is one canvas-sized ``CLayer`` inside a single ``CLayeredImage`` (a synthetic PSD), rendered
+through a per-mesh filter graph. This mirrors, mesh for mesh, the reverse-engineering reference that is
+confirmed to open in Cubism Editor 5.0.
 
 Because our decomposed part textures are already full-canvas PNGs (the part painted at its true canvas
 location, transparent elsewhere) and mesh UVs are full-canvas ``[0, 1]``, the mapping is direct: a
@@ -27,6 +31,10 @@ import xml.etree.ElementTree as ET
 from collections.abc import Callable
 
 from ....irr.schema import Rig, Texture
+# Reuse the moc3 emitter's keyform math so both Live2D backends deform *identically* from the same IRR:
+# which parameters drive a part, the per-vertex offset at a key, opacity keying, and the cap on how many
+# params may drive one mesh (keyforms per mesh = product of their key counts). See :mod:`..moc3_emit`.
+from ..moc3_emit import _affecting_params, _offset_at, _opacity_at, _opacity_params
 
 # --- Well-known UUIDs the Editor compares by literal equality --------------------------------------
 # The root deformer and root parameter group are referenced by these exact UUIDs; the two filter-def
@@ -253,6 +261,9 @@ def build_main_xml(
     param_guid_ref: dict[str, str] = {
         p.id: sh.add("CParameterGuid", uuid=_new_uuid(), note=p.id)[1] for p in rig.parameters
     }
+    # Canonical parameter order (matches the moc3 grid): a mesh's keyform axes are laid out ascending by
+    # this index so the two backends index the grid identically.
+    pidx = {p.id: k for k, p in enumerate(rig.parameters)}
 
     blend_normal, ref_blend = sh.add("CBlend_Normal")
     _blend_super = _sub(blend_normal, "ACBlend", xs__n="super")
@@ -320,7 +331,6 @@ def build_main_xml(
         texture_files.append((arc_path, png))
 
         ref_drawable = sh.add("CDrawableGuid", uuid=_new_uuid(), note=name)[1]
-        ref_form_mesh = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{name}_form")[1]
         ref_mi_guid = sh.add("CModelImageGuid", uuid=_new_uuid(), note=f"modelimg{i}")[1]
         ref_tex_guid = sh.add("GTextureGuid", uuid=_new_uuid(), note=f"tex{i}")[1]
         ref_ext_mesh = sh.add("CExtensionGuid", uuid=_new_uuid(), note="mesh_ext")[1]
@@ -349,13 +359,15 @@ def build_main_xml(
         ref_tex2d = _build_texture2d(sh, name, ref_tex_guid, ref_img)
         ref_tie = _build_texture_input_ext(sh, ref_ext_tex, ref_mi_guid)
 
-        # Static keyform grid (rest pose, no parameter binding yet — Phase 2 adds deformation).
-        ref_kfg_mesh = _static_keyform_grid(sh, ref_form_mesh)
+        # Keyform grid: bind every parameter that deforms/fades this part; one grid cell (CArtMeshForm)
+        # per cartesian combination of their keys. A part no parameter drives gets a single rest cell.
+        ref_kfg_mesh, cell_forms = _mesh_keyform_grid(
+            sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid_ref)
 
         ref_mesh = _build_art_mesh(
             sh, name, mesh, canvas_w, canvas_h, ref_part_root, ref_kfg_mesh, ref_ext_mesh,
-            ref_emesh, ref_coord, ref_tie, ref_drawable, ref_deformer_root, ref_form_mesh,
-            ref_tex2d, part.opacity)
+            ref_emesh, ref_coord, ref_tie, ref_drawable, ref_deformer_root, cell_forms,
+            ref_tex2d)
         mesh_refs.append(ref_mesh)
 
         # Point the texture-input extension's _owner back at the mesh now that it exists.
@@ -588,7 +600,8 @@ def _build_texture_input_ext(sh, ref_ext_tex, ref_mi_guid) -> str:
 
 
 def _static_keyform_grid(sh, ref_form) -> str:
-    """A keyform grid with a single rest form and no parameter bindings (nothing deforms it yet)."""
+    """A keyform grid with a single rest form and no parameter bindings (nothing deforms it). Used by the
+    root part, which carries no parameter-driven motion."""
     grid, ref_grid = sh.add("KeyformGridSource")
     kfog = _sub(grid, "array_list", xs__n="keyformsOnGrid", count="1")
     kog = _sub(kfog, "KeyformOnGrid")
@@ -599,13 +612,105 @@ def _static_keyform_grid(sh, ref_form) -> str:
     return ref_grid
 
 
+def _mesh_keyform_grid(sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid_ref):
+    """Build a mesh's ``KeyformGridSource`` bound to the parameters that drive ``part``.
+
+    Returns ``(ref_grid, cell_forms)`` where ``cell_forms`` is one ``(ref_form_guid, positions_px,
+    opacity)`` per grid cell, parallel to the grid's ``keyformsOnGrid`` — the caller emits one
+    ``CArtMeshForm`` per entry. Positions are in canvas pixels (``norm * canvas``).
+
+    The grid is the cartesian product of the driving parameters' keys, param[0] fastest-varying and axes
+    ordered ascending by parameter index (identical to the moc3 grid, so both backends read the same
+    cell). Each cell's form = rest pose + the summed per-vertex offset of each axis at that cell's key,
+    and its opacity = the part's base opacity times any keyed opacity overrides. A part no parameter
+    drives falls back to a single rest cell with no bindings.
+    """
+    part_id = part.id
+    nv = len(mesh.vertices)
+    rest_px = [(x * canvas_w, y * canvas_h) for (x, y) in mesh.vertices]
+
+    # Params that deform this part (magnitude-capped), plus any that only key its opacity; canonical order.
+    affecting = _affecting_params(rig, part_id)
+    opac_only = [p for p in _opacity_params(rig, part_id) if p not in affecting]
+    affecting = sorted(affecting + opac_only, key=lambda p: pidx[p.id])
+
+    if not affecting:
+        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{part_id}_rest")[1]
+        return _static_keyform_grid(sh, ref_form), [(ref_form, rest_px, part.opacity)]
+
+    keys_per = [sorted(kf.value for kf in p.keyforms) for p in affecting]
+    total = 1
+    for ks in keys_per:
+        total *= len(ks)
+
+    grid, ref_grid = sh.add("KeyformGridSource")
+    # Allocate a binding per axis up front so each cell's KeyOnParameter can reference it; fill them after
+    # the grid exists (a binding points back at its grid).
+    binding_els = [sh.add("KeyformBindingSource") for _ in affecting]
+    binding_refs = [ref for _, ref in binding_els]
+
+    cell_forms = []
+    kfog = _sub(grid, "array_list", xs__n="keyformsOnGrid", count=str(total))
+    for idx in range(total):
+        pos = [list(v) for v in mesh.vertices]        # normalized rest; offsets are normalized deltas
+        op = part.opacity
+        axis_ki = []
+        rem = idx
+        for pi, p in enumerate(affecting):
+            ki = rem % len(keys_per[pi])
+            rem //= len(keys_per[pi])
+            axis_ki.append(ki)
+            for j, (dx, dy) in enumerate(_offset_at(p, keys_per[pi][ki], part_id, nv)):
+                pos[j][0] += dx
+                pos[j][1] += dy
+            ov = _opacity_at(p, keys_per[pi][ki], part_id)
+            if ov is not None:
+                op *= ov
+        pos_px = [(x * canvas_w, y * canvas_h) for x, y in pos]
+        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{part_id}_c{idx}")[1]
+        cell_forms.append((ref_form, pos_px, op))
+
+        kog = _sub(kfog, "KeyformOnGrid")
+        ak = _sub(kog, "KeyformGridAccessKey", xs__n="accessKey")
+        kop_list = _sub(ak, "array_list", xs__n="_keyOnParameterList", count=str(len(affecting)))
+        for pi in range(len(affecting)):
+            kop = _sub(kop_list, "KeyOnParameter")
+            _sub(kop, "KeyformBindingSource", xs__n="binding", xs__ref=binding_refs[pi])
+            _text(kop, "i", str(axis_ki[pi]), xs__n="keyIndex")
+        _sub(kog, "CFormGuid", xs__n="keyformGuid", xs__ref=ref_form)
+
+    kb = _sub(grid, "array_list", xs__n="keyformBindings", count=str(len(affecting)))
+    for bref in binding_refs:
+        _sub(kb, "KeyformBindingSource", xs__ref=bref)
+
+    for (el, _), p, keys in zip(binding_els, affecting, keys_per):
+        _fill_kf_binding(el, ref_grid, param_guid_ref[p.id], keys, p.id)
+
+    return ref_grid, cell_forms
+
+
+def _fill_kf_binding(el, ref_grid, ref_param_guid, keys, description) -> None:
+    """One parameter axis of a keyform grid: its keys (parameter stop values) and LINEAR interpolation."""
+    _sub(el, "KeyformGridSource", xs__n="_gridSource", xs__ref=ref_grid)
+    _sub(el, "CParameterGuid", xs__n="parameterGuid", xs__ref=ref_param_guid)
+    keys_arr = _sub(el, "array_list", xs__n="keys", count=str(len(keys)))
+    for k in keys:
+        _text(keys_arr, "f", f"{k:.4f}")
+    _sub(el, "InterpolationType", xs__n="interpolationType", v="LINEAR")
+    _sub(el, "ExtendedInterpolationType", xs__n="extendedInterpolationType", v="LINEAR")
+    _text(el, "i", "1", xs__n="insertPointCount")
+    _text(el, "f", "1.0", xs__n="extendedInterpolationScale")
+    _text(el, "s", description, xs__n="description")
+
+
 def _build_art_mesh(
     sh, name, mesh, canvas_w, canvas_h, ref_part_root, ref_kfg_mesh, ref_ext_mesh, ref_emesh,
-    ref_coord, ref_tie, ref_drawable, ref_deformer_root, ref_form_mesh, ref_tex2d, opacity,
+    ref_coord, ref_tie, ref_drawable, ref_deformer_root, cell_forms, ref_tex2d,
 ) -> str:
     mesh_src, ref_mesh = sh.add("CArtMeshSource")
 
-    # Geometry: model-space [0,1] (y-down) -> canvas pixels; UVs pass straight through (v-down).
+    # Geometry: model-space [0,1] (y-down) -> canvas pixels; UVs pass straight through (v-down). The
+    # top-level ``positions`` is the rest/base mesh; per-parameter deformation lives in ``cell_forms``.
     positions = [c for (x, y) in mesh.vertices for c in (x * canvas_w, y * canvas_h)]
     uvs = [c for uv in mesh.uvs for c in uv]
     n = len(mesh.vertices)
@@ -663,23 +768,26 @@ def _build_art_mesh(
     _text(mesh_src, "int-array", " ".join(str(v) for v in indices), xs__n="indices",
           count=str(len(indices)))
 
-    kf_list = _sub(mesh_src, "carray_list", xs__n="keyforms", count="1")
-    art_form = _sub(kf_list, "CArtMeshForm")
-    adf = _sub(art_form, "ACDrawableForm", xs__n="super")
-    acf = _sub(adf, "ACForm", xs__n="super")
-    _sub(acf, "CFormGuid", xs__n="guid", xs__ref=ref_form_mesh)
-    _text(acf, "b", "false", xs__n="isAnimatedForm")
-    _text(acf, "b", "false", xs__n="isLocalAnimatedForm")
-    _sub(acf, "CArtMeshSource", xs__n="_source", xs__ref=ref_mesh)
-    _sub(acf, "null", xs__n="name")
-    _text(acf, "s", "", xs__n="notes")
-    _text(adf, "i", "500", xs__n="drawOrder")
-    _text(adf, "f", f"{opacity:.4f}", xs__n="opacity")
-    _sub(adf, "CFloatColor", xs__n="multiplyColor", red="1.0", green="1.0", blue="1.0", alpha="1.0")
-    _sub(adf, "CFloatColor", xs__n="screenColor", red="0.0", green="0.0", blue="0.0", alpha="1.0")
-    _sub(adf, "CoordType", xs__n="coordType", xs__ref=ref_coord)
-    _text(art_form, "float-array", " ".join(f"{v:.4f}" for v in positions), xs__n="positions",
-          count=str(2 * n))
+    # One CArtMeshForm per keyform-grid cell: its own form guid, deformed positions and opacity.
+    kf_list = _sub(mesh_src, "carray_list", xs__n="keyforms", count=str(len(cell_forms)))
+    for ref_form, cell_px, cell_opacity in cell_forms:
+        art_form = _sub(kf_list, "CArtMeshForm")
+        adf = _sub(art_form, "ACDrawableForm", xs__n="super")
+        acf = _sub(adf, "ACForm", xs__n="super")
+        _sub(acf, "CFormGuid", xs__n="guid", xs__ref=ref_form)
+        _text(acf, "b", "false", xs__n="isAnimatedForm")
+        _text(acf, "b", "false", xs__n="isLocalAnimatedForm")
+        _sub(acf, "CArtMeshSource", xs__n="_source", xs__ref=ref_mesh)
+        _sub(acf, "null", xs__n="name")
+        _text(acf, "s", "", xs__n="notes")
+        _text(adf, "i", "500", xs__n="drawOrder")
+        _text(adf, "f", f"{cell_opacity:.4f}", xs__n="opacity")
+        _sub(adf, "CFloatColor", xs__n="multiplyColor", red="1.0", green="1.0", blue="1.0", alpha="1.0")
+        _sub(adf, "CFloatColor", xs__n="screenColor", red="0.0", green="0.0", blue="0.0", alpha="1.0")
+        _sub(adf, "CoordType", xs__n="coordType", xs__ref=ref_coord)
+        flat = [c for xy in cell_px for c in xy]
+        _text(art_form, "float-array", " ".join(f"{v:.4f}" for v in flat), xs__n="positions",
+              count=str(2 * n))
 
     _text(mesh_src, "float-array", " ".join(f"{v:.4f}" for v in positions), xs__n="positions",
           count=str(2 * n))

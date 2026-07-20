@@ -79,8 +79,10 @@ def _bind(lib: C.CDLL) -> None:
     lib.csmGetDrawableIndexCounts.restype = C.POINTER(C.c_int)
     lib.csmGetDrawableVertexPositions.restype = C.POINTER(C.POINTER(_Vec2))
     lib.csmGetDrawableIndices.restype = C.POINTER(C.POINTER(C.c_ushort))
+    lib.csmGetDrawableOpacities.restype = C.POINTER(C.c_float)
     for fn in ("csmGetParameterIds", "csmGetDrawableIds", "csmGetDrawableVertexCounts",
-               "csmGetDrawableIndexCounts", "csmGetDrawableVertexPositions", "csmGetDrawableIndices"):
+               "csmGetDrawableIndexCounts", "csmGetDrawableVertexPositions", "csmGetDrawableIndices",
+               "csmGetDrawableOpacities"):
         getattr(lib, fn).argtypes = [p]
 
 
@@ -144,6 +146,13 @@ class Model:
             return False
         self._values[i] = value
         return True
+
+    def opacity_of(self, drawable_id: str) -> float:
+        """The drawable's current opacity (0..1) as the core computes it from the live parameter table —
+        the runtime-truth read for opacity keyforms, the analogue of ``_positions`` for geometry. Call
+        ``update()`` (or ``set_param`` then ``update``) first so the value reflects the current pose."""
+        ops = self._lib.csmGetDrawableOpacities(self._model)
+        return float(ops[self._draw_ids.index(drawable_id)])
 
     def _positions(self) -> list[list[tuple[float, float]]]:
         pos = self._lib.csmGetDrawableVertexPositions(self._model)

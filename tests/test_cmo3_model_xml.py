@@ -20,7 +20,7 @@ from image2live2d.backends.live2d.cmo3.model_xml import (
     build_main_xml,
 )
 from image2live2d.irr.schema import (
-    Keyform, Mesh, Meta, Parameter, Part, Rig, SemanticRole, Texture,
+    Deformer, DeformerType, Keyform, Mesh, Meta, Parameter, Part, Rig, SemanticRole, Texture,
 )
 
 
@@ -85,6 +85,40 @@ def _deform_rig():
         Keyform(value=30, mesh_offsets={"face": dy})])
     return Rig(meta=Meta(name="Deform"), textures=textures, parts=parts, meshes=meshes,
                parameters=[eye, angle_x, angle_y])
+
+
+def _deformer_rig():
+    """A rig with deformers (Phase 3): a static root rotation deformer, a warp deformer beneath it that a
+    parameter drives, and a ``head`` part parented to the warp (``body`` stays on the root deformer)."""
+    q = [(0.2, 0.2), (0.8, 0.2), (0.8, 0.8), (0.2, 0.8)]
+    tris = [(0, 1, 2), (0, 2, 3)]
+    textures = [Texture(id="tex", path="tex.png", width=256, height=256)]
+    parts = [
+        Part(id="head", semantic_role=SemanticRole.face_base, texture_id="tex", draw_order=1,
+             parent_deformer="warp_head"),
+        Part(id="body", semantic_role=SemanticRole.torso, texture_id="tex", draw_order=0),
+    ]
+    meshes = [Mesh(part_id="head", vertices=q, uvs=q, triangles=tris),
+              Mesh(part_id="body", vertices=q, uvs=q, triangles=tris)]
+    lattice = [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0)]  # 2x2
+    deformers = [
+        Deformer(id="rot_root", type=DeformerType.rotation, parent=None, pivot=(0.5, 0.5)),
+        Deformer(id="warp_head", type=DeformerType.warp, parent="rot_root",
+                 grid_rows=2, grid_cols=2, grid_vertices=lattice),
+    ]
+    angle = Parameter(id="ParamAngleX", min=-30, max=30, default=0, keyforms=[
+        Keyform(value=-30, deformer_offsets={"warp_head": [(-0.05, 0.0)] * 4}),
+        Keyform(value=0, deformer_offsets={"warp_head": [(0.0, 0.0)] * 4}),
+        Keyform(value=30, deformer_offsets={"warp_head": [(0.05, 0.0)] * 4})])
+    return Rig(meta=Meta(name="Deformers"), textures=textures, parts=parts, meshes=meshes,
+               deformers=deformers, parameters=[angle])
+
+
+def _deformer_named(shared, tag):
+    for o in shared:
+        if o.tag == tag:
+            return o
+    raise AssertionError(f"no {tag}")
 
 
 def _shared_by_id(shared):
@@ -300,3 +334,99 @@ def test_deform_rig_refs_all_resolve_and_pack():
     assert not dangling, f"dangling xs.ref: {dangling}"
     data = rig_to_cmo3(_deform_rig(), asset_root=None)
     assert unpack_caff(data)  # round-trips through the CAFF container
+
+
+# --- Phase 3: deformers ----------------------------------------------------------------------------
+
+def test_deformers_populate_source_set():
+    _, _, _, main, _ = _parse_shared(_deformer_rig())
+    srcs = main.find("CModelSource/CDeformerSourceSet/carray_list[@xs.n='_sources']")
+    assert srcs.get("count") == "2"
+    tags = {c.tag for c in srcs}
+    assert tags == {"CWarpDeformerSource", "CRotationDeformerSource"}
+
+
+def test_deformer_hierarchy_targets():
+    # warp targets its parent rotation deformer; the root rotation targets the well-known root deformer.
+    _, _, shared, _, _ = _parse_shared(_deformer_rig())
+    byid = _shared_by_id(shared)
+
+    def target_note(tag):
+        src = _deformer_named(shared, tag)
+        ref = src.find("ACDeformerSource/CDeformerGuid[@xs.n='targetDeformerGuid']").get("xs.ref")
+        return byid[ref].get("note")
+
+    assert target_note("CWarpDeformerSource") == "rot_root"
+    rot = _deformer_named(shared, "CRotationDeformerSource")
+    root_ref = rot.find("ACDeformerSource/CDeformerGuid[@xs.n='targetDeformerGuid']").get("xs.ref")
+    assert byid[root_ref].get("uuid") == DEFORMER_ROOT
+
+
+def test_warp_deformer_has_parameter_grid():
+    # ParamAngleX (3 keys) drives the warp -> 3 grid cells, 1 binding, 3 CWarpDeformerForms whose
+    # lattice positions actually differ.
+    _, _, shared, _, _ = _parse_shared(_deformer_rig())
+    byid = _shared_by_id(shared)
+    warp = _deformer_named(shared, "CWarpDeformerSource")
+    assert warp.find("i[@xs.n='col']").text == "1"  # 2x2 lattice -> 1x1 segments
+    assert warp.find("i[@xs.n='row']").text == "1"
+    grid_ref = warp.find("ACDeformerSource/ACParameterControllableSource/"
+                         "KeyformGridSource[@xs.n='keyformGridSource']").get("xs.ref")
+    grid = byid[grid_ref]
+    assert grid.find("array_list[@xs.n='keyformsOnGrid']").get("count") == "3"
+    assert grid.find("array_list[@xs.n='keyformBindings']").get("count") == "1"
+    forms = warp.find("carray_list[@xs.n='keyforms']").findall("CWarpDeformerForm")
+    assert len(forms) == 3
+    pos = [f.find("float-array[@xs.n='positions']").text for f in forms]
+    assert len(set(pos)) == 3  # each key deforms the lattice differently
+    # 8 floats per form (4 lattice points x XY)
+    assert all(len(p.split()) == 8 for p in pos)
+
+
+def test_rotation_deformer_is_static_at_pivot():
+    # No angle in the IRR -> a single rest form, angle 0, origin at pivot*canvas (0.5*256 = 128).
+    _, _, shared, _, _ = _parse_shared(_deformer_rig())
+    rot = _deformer_named(shared, "CRotationDeformerSource")
+    forms = rot.find("carray_list[@xs.n='keyforms']").findall("CRotationDeformerForm")
+    assert len(forms) == 1
+    f = forms[0]
+    assert float(f.get("angle")) == 0.0
+    assert float(f.get("originX")) == pytest.approx(0.5 * 256)
+    assert float(f.get("originY")) == pytest.approx(0.5 * 256)
+
+
+def test_part_targets_its_parent_deformer():
+    _, _, shared, _, _ = _parse_shared(_deformer_rig())
+    byid = _shared_by_id(shared)
+
+    def mesh_target_note(name):
+        ref = _mesh_named(shared, name).find(
+            "ACDrawableSource/CDeformerGuid[@xs.n='targetDeformerGuid']").get("xs.ref")
+        return byid[ref].get("note"), byid[ref].get("uuid")
+
+    assert mesh_target_note("head")[0] == "warp_head"          # parented part targets its deformer
+    assert mesh_target_note("body")[1] == DEFORMER_ROOT         # un-parented part targets the root
+
+
+def test_deformers_reachable_from_root_part():
+    # Both deformers must be listed in the root part's _childGuids alongside the drawables (an unreachable
+    # node is what the Editor flags "(recovered)").
+    _, _, shared, _, _ = _parse_shared(_deformer_rig())
+    part = next(o for o in shared if o.tag == "CPartSource")
+    cg = part.find("carray_list[@xs.n='_childGuids']")
+    assert cg.get("count") == "4"  # 2 drawables + 2 deformers
+    assert len(cg.findall("CDeformerGuid")) == 2
+    assert len(cg.findall("CDrawableGuid")) == 2
+
+
+def test_deformer_rig_refs_resolve_and_pack():
+    xml, root, shared, _, _ = _parse_shared(_deformer_rig())
+    ids = {o.get("xs.id") for o in shared}
+    dangling = sorted({el.get("xs.ref") for el in root.iter()
+                       if el.get("xs.ref") is not None} - ids)
+    assert not dangling, f"dangling xs.ref: {dangling}"
+    # deformer element/import versions present; CModelSource stays at 4 (v14 is Phase 4 / physics)
+    assert "<?version CRotationDeformerForm:1?>" in xml
+    assert "warp.CWarpDeformerSource" in xml
+    assert "<?version CModelSource:4?>" in xml
+    assert unpack_caff(rig_to_cmo3(_deformer_rig(), asset_root=None))

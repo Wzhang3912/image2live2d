@@ -30,7 +30,7 @@ import uuid as _uuid_mod
 import xml.etree.ElementTree as ET
 from collections.abc import Callable
 
-from ....irr.schema import Rig, Texture
+from ....irr.schema import DeformerType, Rig, Texture
 # Reuse the moc3 emitter's keyform math so both Live2D backends deform *identically* from the same IRR:
 # which parameters drive a part, the per-vertex offset at a key, opacity keying, and the cap on how many
 # params may drive one mesh (keyforms per mesh = product of their key counts). See :mod:`..moc3_emit`.
@@ -48,9 +48,14 @@ FILTER_DEF_LAYER_FILTER = "4083cd1f-40ba-4eda-8400-379019d55ed8"
 # choice: v4 does not require rootParameterGroup / modelOptions / gameMotionSet, so an MVE can omit them.
 _VERSION_PIS = [
     ("CArtMeshSource", "4"),
+    ("CRotationDeformerForm", "1"),
     ("KeyformGridSource", "1"),
     ("CParameterGroup", "4"),
     ("SerializeFormatVersion", "2"),
+    # Deformers do NOT require a CModelSource bump — they live in CDeformerSourceSet, a separate class
+    # the v4 reader already parses (Phase 1 emitted it empty). The rival bumps to CModelSource:14 only to
+    # enable *physics* (physicsSettingsSourceSet), which drags in mandatory rootParameterGroup/modelOptions/
+    # gameMotionSet fields; that bump belongs to Phase 4, not here. Staying on v4 keeps this MVE minimal.
     ("CModelSource", "4"),
     ("CFloatColor", "1"),
     ("CLabelColor", "0"),
@@ -65,7 +70,13 @@ _IMPORT_PIS = [
     "com.live2d.cubism.doc.model.CModelInfo",
     "com.live2d.cubism.doc.model.CModelSource",
     "com.live2d.cubism.doc.model.affecter.CAffecterSourceSet",
+    "com.live2d.cubism.doc.model.deformer.ACDeformerForm",
+    "com.live2d.cubism.doc.model.deformer.ACDeformerSource",
     "com.live2d.cubism.doc.model.deformer.CDeformerSourceSet",
+    "com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerForm",
+    "com.live2d.cubism.doc.model.deformer.rotation.CRotationDeformerSource",
+    "com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerForm",
+    "com.live2d.cubism.doc.model.deformer.warp.CWarpDeformerSource",
     "com.live2d.cubism.doc.model.drawable.ACDrawableForm",
     "com.live2d.cubism.doc.model.drawable.ACDrawableSource",
     "com.live2d.cubism.doc.model.drawable.CDrawableSourceSet",
@@ -84,6 +95,7 @@ _IMPORT_PIS = [
     "com.live2d.cubism.doc.model.extension.textureInput.inputFilter.CLayerSelectorMap",
     "com.live2d.cubism.doc.model.extension.textureInput.inputFilter.ModelImageFilterEnv",
     "com.live2d.cubism.doc.model.extension.textureInput.inputFilter.ModelImageFilterSet",
+    "com.live2d.cubism.doc.model.id.CDeformerId",
     "com.live2d.cubism.doc.model.id.CDrawableId",
     "com.live2d.cubism.doc.model.id.CParameterId",
     "com.live2d.cubism.doc.model.id.CPartId",
@@ -272,6 +284,12 @@ def build_main_xml(
     _, ref_li_guid = sh.add("CLayeredImageGuid", uuid=_new_uuid(), note="synthetic_psd")
     _, ref_deformer_root = sh.add("CDeformerGuid", uuid=DEFORMER_ROOT, note="ROOT")
 
+    # Deformer guids are shared and allocated up front so a mesh can target its parent deformer during the
+    # loop below and each deformer can target its own parent deformer regardless of build order.
+    deformer_guid: dict[str, str] = {
+        d.id: sh.add("CDeformerGuid", uuid=_new_uuid(), note=d.id)[1] for d in rig.deformers
+    }
+
     coord_type, ref_coord = sh.add("CoordType")
     _text(coord_type, "s", "DeformerLocal", xs__n="coordName")
 
@@ -364,9 +382,12 @@ def build_main_xml(
         ref_kfg_mesh, cell_forms = _mesh_keyform_grid(
             sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid_ref)
 
+        # A part parented to a deformer targets it; otherwise it hangs directly off the root deformer.
+        ref_mesh_target = (
+            deformer_guid[part.parent_deformer] if part.parent_deformer else ref_deformer_root)
         ref_mesh = _build_art_mesh(
             sh, name, mesh, canvas_w, canvas_h, ref_part_root, ref_kfg_mesh, ref_ext_mesh,
-            ref_emesh, ref_coord, ref_tie, ref_drawable, ref_deformer_root, cell_forms,
+            ref_emesh, ref_coord, ref_tie, ref_drawable, ref_mesh_target, cell_forms,
             ref_tex2d)
         mesh_refs.append(ref_mesh)
 
@@ -383,11 +404,18 @@ def build_main_xml(
     _fill_layered_image(layered_img, canvas_w, canvas_h, ref_li_guid, ref_lg, layer_refs)
     _fill_model_image_group(img_group, ref_li_guid, model_image_els)
 
-    # The single root part that owns every drawable.
+    # ---- deformers (Phase 3) ---------------------------------------------------------------------
+    deformer_sources = _build_deformers(
+        sh, rig, canvas_w, canvas_h, ref_coord, param_guid_ref, pidx, ref_part_root, deformer_guid,
+        ref_deformer_root)
+
+    # The single root part owns every drawable and every deformer (its _childGuids reaches both).
     ref_part_form = sh.add("CFormGuid", uuid=_new_uuid(), note="PartRoot_form")[1]
     ref_kfg_part = _static_keyform_grid(sh, ref_part_form)
+    deformer_child_refs = [deformer_guid[d.id] for d in rig.deformers]
     ref_part_src = _build_root_part(
-        sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawable_refs, ref_part_form)
+        sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawable_refs, deformer_child_refs,
+        ref_part_form)
 
     # ---- assemble main.xml -----------------------------------------------------------------------
     root = _e("root", fileFormatVersion="402030000")
@@ -398,7 +426,7 @@ def build_main_xml(
     main_el = _sub(root, "main")
     _build_model_source(
         main_el, rig, ref_model, canvas_w, canvas_h, ref_param_group, param_guid_ref, mesh_refs,
-        ref_part_src, ref_li, ref_img_grp)
+        ref_part_src, ref_li, ref_img_grp, deformer_sources)
 
     pi_lines = ['<?xml version="1.0" encoding="UTF-8"?>']
     pi_lines += [f"<?version {n}:{v}?>" for n, v in _VERSION_PIS]
@@ -612,33 +640,15 @@ def _static_keyform_grid(sh, ref_form) -> str:
     return ref_grid
 
 
-def _mesh_keyform_grid(sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid_ref):
-    """Build a mesh's ``KeyformGridSource`` bound to the parameters that drive ``part``.
+def _build_keyform_grid(sh, affecting, keys_per, param_guid_ref, note_prefix):
+    """Build a ``KeyformGridSource`` bound to ``affecting`` parameters (one binding per axis).
 
-    Returns ``(ref_grid, cell_forms)`` where ``cell_forms`` is one ``(ref_form_guid, positions_px,
-    opacity)`` per grid cell, parallel to the grid's ``keyformsOnGrid`` — the caller emits one
-    ``CArtMeshForm`` per entry. Positions are in canvas pixels (``norm * canvas``).
-
-    The grid is the cartesian product of the driving parameters' keys, param[0] fastest-varying and axes
-    ordered ascending by parameter index (identical to the moc3 grid, so both backends read the same
-    cell). Each cell's form = rest pose + the summed per-vertex offset of each axis at that cell's key,
-    and its opacity = the part's base opacity times any keyed opacity overrides. A part no parameter
-    drives falls back to a single rest cell with no bindings.
+    Returns ``(ref_grid, cells)`` where ``cells[i] = (ref_form_guid, axis_values)`` — one entry per grid
+    cell (the cartesian product of the axes' keys, param[0] fastest-varying), ``axis_values`` being the
+    parameter value on each axis at that cell. The caller allocates nothing else here but owns building
+    the concrete forms (``CArtMeshForm`` / ``CWarpDeformerForm`` ...) that reference the returned form
+    guids. Shared by the mesh grid and the warp-deformer grid so their binding structure is identical.
     """
-    part_id = part.id
-    nv = len(mesh.vertices)
-    rest_px = [(x * canvas_w, y * canvas_h) for (x, y) in mesh.vertices]
-
-    # Params that deform this part (magnitude-capped), plus any that only key its opacity; canonical order.
-    affecting = _affecting_params(rig, part_id)
-    opac_only = [p for p in _opacity_params(rig, part_id) if p not in affecting]
-    affecting = sorted(affecting + opac_only, key=lambda p: pidx[p.id])
-
-    if not affecting:
-        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{part_id}_rest")[1]
-        return _static_keyform_grid(sh, ref_form), [(ref_form, rest_px, part.opacity)]
-
-    keys_per = [sorted(kf.value for kf in p.keyforms) for p in affecting]
     total = 1
     for ks in keys_per:
         total *= len(ks)
@@ -649,26 +659,18 @@ def _mesh_keyform_grid(sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid
     binding_els = [sh.add("KeyformBindingSource") for _ in affecting]
     binding_refs = [ref for _, ref in binding_els]
 
-    cell_forms = []
+    cells = []
     kfog = _sub(grid, "array_list", xs__n="keyformsOnGrid", count=str(total))
     for idx in range(total):
-        pos = [list(v) for v in mesh.vertices]        # normalized rest; offsets are normalized deltas
-        op = part.opacity
-        axis_ki = []
         rem = idx
-        for pi, p in enumerate(affecting):
+        axis_ki, axis_vals = [], []
+        for pi in range(len(affecting)):
             ki = rem % len(keys_per[pi])
             rem //= len(keys_per[pi])
             axis_ki.append(ki)
-            for j, (dx, dy) in enumerate(_offset_at(p, keys_per[pi][ki], part_id, nv)):
-                pos[j][0] += dx
-                pos[j][1] += dy
-            ov = _opacity_at(p, keys_per[pi][ki], part_id)
-            if ov is not None:
-                op *= ov
-        pos_px = [(x * canvas_w, y * canvas_h) for x, y in pos]
-        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{part_id}_c{idx}")[1]
-        cell_forms.append((ref_form, pos_px, op))
+            axis_vals.append(keys_per[pi][ki])
+        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{note_prefix}_c{idx}")[1]
+        cells.append((ref_form, axis_vals))
 
         kog = _sub(kfog, "KeyformOnGrid")
         ak = _sub(kog, "KeyformGridAccessKey", xs__n="accessKey")
@@ -686,7 +688,195 @@ def _mesh_keyform_grid(sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid
     for (el, _), p, keys in zip(binding_els, affecting, keys_per):
         _fill_kf_binding(el, ref_grid, param_guid_ref[p.id], keys, p.id)
 
+    return ref_grid, cells
+
+
+def _mesh_keyform_grid(sh, rig, part, mesh, canvas_w, canvas_h, pidx, param_guid_ref):
+    """Build a mesh's ``KeyformGridSource`` bound to the parameters that drive ``part``.
+
+    Returns ``(ref_grid, cell_forms)`` where ``cell_forms`` is one ``(ref_form_guid, positions_px,
+    opacity)`` per grid cell, parallel to the grid's ``keyformsOnGrid`` — the caller emits one
+    ``CArtMeshForm`` per entry. Positions are in canvas pixels (``norm * canvas``).
+
+    Axes are ordered ascending by parameter index (identical to the moc3 grid, so both backends read the
+    same cell). Each cell's form = rest pose + the summed per-vertex offset of each axis at that cell's
+    key, and its opacity = the part's base opacity times any keyed opacity overrides. A part no parameter
+    drives falls back to a single rest cell with no bindings.
+    """
+    part_id = part.id
+    nv = len(mesh.vertices)
+    rest_px = [(x * canvas_w, y * canvas_h) for (x, y) in mesh.vertices]
+
+    # Params that deform this part (magnitude-capped), plus any that only key its opacity; canonical order.
+    affecting = _affecting_params(rig, part_id)
+    opac_only = [p for p in _opacity_params(rig, part_id) if p not in affecting]
+    affecting = sorted(affecting + opac_only, key=lambda p: pidx[p.id])
+
+    if not affecting:
+        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{part_id}_rest")[1]
+        return _static_keyform_grid(sh, ref_form), [(ref_form, rest_px, part.opacity)]
+
+    keys_per = [sorted(kf.value for kf in p.keyforms) for p in affecting]
+    ref_grid, cells = _build_keyform_grid(sh, affecting, keys_per, param_guid_ref, part_id)
+
+    cell_forms = []
+    for ref_form, axis_vals in cells:
+        pos = [list(v) for v in mesh.vertices]        # normalized rest; offsets are normalized deltas
+        op = part.opacity
+        for p, val in zip(affecting, axis_vals):
+            for j, (dx, dy) in enumerate(_offset_at(p, val, part_id, nv)):
+                pos[j][0] += dx
+                pos[j][1] += dy
+            ov = _opacity_at(p, val, part_id)
+            if ov is not None:
+                op *= ov
+        cell_forms.append((ref_form, [(x * canvas_w, y * canvas_h) for x, y in pos], op))
     return ref_grid, cell_forms
+
+
+# --- deformers (Phase 3) ---------------------------------------------------------------------------
+# Warp deformers get full parameter-driven keyform grids (a lattice whose control points move per
+# parameter — this is how the moc3 backend does head/body turn). Rotation deformers carry no angle in the
+# IRR (only a pivot), so a faithful keyform would rotate by 0° = a no-op; they are emitted as
+# structurally-valid *static* deformers instead (their children still render), a documented limitation
+# until the IRR grows rotation-angle keyforms. NB: our authoring pipeline currently emits ``deformers=[]``
+# (turn is synthesized inside each backend), so this path is exercised by tests, not yet by live output.
+
+def _deformer_affecting(rig, def_id, pidx):
+    """Parameters whose keyforms move deformer ``def_id`` (nonzero grid-vertex delta), canonical order."""
+    out = []
+    for p in rig.parameters:
+        mag = 0.0
+        for kf in p.keyforms:
+            for dx, dy in kf.deformer_offsets.get(def_id, []):
+                mag += abs(dx) + abs(dy)
+        if mag > 1e-9:
+            out.append(p)
+    return sorted(out, key=lambda p: pidx[p.id])
+
+
+def _deformer_offset_at(param, value, def_id, npts):
+    """Per-grid-point (dx, dy) deltas for ``param`` at keyform ``value`` (zeros if none)."""
+    for kf in param.keyforms:
+        if kf.value == value:
+            offs = kf.deformer_offsets.get(def_id)
+            if offs and len(offs) == npts:
+                return offs
+            break
+    return [(0.0, 0.0)] * npts
+
+
+def _deformer_common(sh, source_el, deformer, ref_part_root, ref_grid, ref_self_guid, ref_target):
+    """The ``ACDeformerSource`` header shared by warp and rotation deformers: name, parent part, keyform
+    grid, guid, id and the target (parent) deformer that this one hangs beneath."""
+    acdfs = _sub(source_el, "ACDeformerSource", xs__n="super")
+    pc = _sub(acdfs, "ACParameterControllableSource", xs__n="super")
+    _text(pc, "s", deformer.id, xs__n="localName")
+    _text(pc, "b", "true", xs__n="isVisible")
+    _text(pc, "b", "false", xs__n="isLocked")
+    _sub(pc, "CPartGuid", xs__n="parentGuid", xs__ref=ref_part_root)
+    _sub(pc, "KeyformGridSource", xs__n="keyformGridSource", xs__ref=ref_grid)
+    morph = _sub(pc, "KeyFormMorphTargetSet", xs__n="keyformMorphTargetSet")
+    _sub(morph, "carray_list", xs__n="_morphTargets", count="0")
+    mbw = _sub(morph, "MorphTargetBlendWeightConstraintSet", xs__n="blendWeightConstraintSet")
+    _sub(mbw, "carray_list", xs__n="_constraints", count="0")
+    _sub(pc, "carray_list", xs__n="_extensions", count="0")
+    _sub(pc, "null", xs__n="internalColor_direct_argb")
+    _sub(pc, "null", xs__n="internalColor_indirect_argb")
+    _sub(acdfs, "CDeformerGuid", xs__n="guid", xs__ref=ref_self_guid)
+    _sub(acdfs, "CDeformerId", xs__n="id", idstr=deformer.id)
+    _sub(acdfs, "CDeformerGuid", xs__n="targetDeformerGuid", xs__ref=ref_target)
+
+
+def _deformer_form_super(parent, tag, ref_form, ref_source, ref_coord):
+    """The ``ACDeformerForm`` (guid, source back-ref, opacity, colours, coord) inside a deformer keyform."""
+    adf = _sub(parent, "ACDeformerForm", xs__n="super")
+    acf = _sub(adf, "ACForm", xs__n="super")
+    _sub(acf, "CFormGuid", xs__n="guid", xs__ref=ref_form)
+    _text(acf, "b", "false", xs__n="isAnimatedForm")
+    _text(acf, "b", "false", xs__n="isLocalAnimatedForm")
+    _sub(acf, tag, xs__n="_source", xs__ref=ref_source)
+    _sub(acf, "null", xs__n="name")
+    _text(acf, "s", "", xs__n="notes")
+    _text(adf, "f", "1.0", xs__n="opacity")
+    _sub(adf, "CFloatColor", xs__n="multiplyColor", red="1.0", green="1.0", blue="1.0", alpha="1.0")
+    _sub(adf, "CFloatColor", xs__n="screenColor", red="0.0", green="0.0", blue="0.0", alpha="1.0")
+    _sub(adf, "CoordType", xs__n="coordType", xs__ref=ref_coord)
+
+
+def _build_warp_deformer(sh, rig, d, cw, ch, ref_coord, param_guid_ref, pidx, ref_part_root,
+                         ref_self_guid, ref_target):
+    """A ``CWarpDeformerSource``: a ``grid_rows``x``grid_cols`` lattice whose control points move per the
+    parameters that key ``deformer_offsets[d.id]``. One ``CWarpDeformerForm`` per keyform-grid cell."""
+    npts = d.grid_rows * d.grid_cols
+    base = d.grid_vertices  # normalized lattice, row-major
+    affecting = _deformer_affecting(rig, d.id, pidx)
+
+    if affecting:
+        keys_per = [sorted(kf.value for kf in p.keyforms) for p in affecting]
+        ref_grid, cells = _build_keyform_grid(sh, affecting, keys_per, param_guid_ref, d.id)
+        cell_forms = []
+        for ref_form, axis_vals in cells:
+            pts = [list(v) for v in base]
+            for p, val in zip(affecting, axis_vals):
+                for j, (dx, dy) in enumerate(_deformer_offset_at(p, val, d.id, npts)):
+                    pts[j][0] += dx
+                    pts[j][1] += dy
+            cell_forms.append((ref_form, [(x * cw, y * ch) for x, y in pts]))
+    else:
+        ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{d.id}_rest")[1]
+        ref_grid = _static_keyform_grid(sh, ref_form)
+        cell_forms = [(ref_form, [(x * cw, y * ch) for x, y in base])]
+
+    warp, ref_src = sh.add("CWarpDeformerSource")
+    _deformer_common(sh, warp, d, ref_part_root, ref_grid, ref_self_guid, ref_target)
+    _text(warp, "i", str(d.grid_cols - 1), xs__n="col")  # Cubism col/row = segments = points - 1
+    _text(warp, "i", str(d.grid_rows - 1), xs__n="row")
+    _text(warp, "b", "false", xs__n="isQuadTransform")
+    kf_list = _sub(warp, "carray_list", xs__n="keyforms", count=str(len(cell_forms)))
+    for ref_form, grid_px in cell_forms:
+        form = _sub(kf_list, "CWarpDeformerForm")
+        _deformer_form_super(form, "CWarpDeformerSource", ref_form, ref_src, ref_coord)
+        flat = [c for xy in grid_px for c in xy]
+        _text(form, "float-array", " ".join(f"{v:.4f}" for v in flat), xs__n="positions",
+              count=str(2 * npts))
+    return "CWarpDeformerSource", ref_src
+
+
+def _build_rotation_deformer(sh, d, cw, ch, ref_coord, ref_part_root, ref_self_guid, ref_target):
+    """A ``CRotationDeformerSource`` emitted as a static passthrough (angle 0, origin at the pivot). The
+    IRR carries no rotation angle, so this deformer does not animate yet; its children still render."""
+    ref_form = sh.add("CFormGuid", uuid=_new_uuid(), note=f"{d.id}_rest")[1]
+    ref_grid = _static_keyform_grid(sh, ref_form)
+    rot, ref_src = sh.add("CRotationDeformerSource")
+    _deformer_common(sh, rot, d, ref_part_root, ref_grid, ref_self_guid, ref_target)
+    _text(rot, "b", "true", xs__n="useBoneUi_testImpl")
+    ox, oy = d.pivot
+    kf_list = _sub(rot, "carray_list", xs__n="keyforms", count="1")
+    form = _sub(kf_list, "CRotationDeformerForm", angle="0.0", originX=f"{ox * cw:.4f}",
+                originY=f"{oy * ch:.4f}", scale="1.0", isReflectX="false", isReflectY="false")
+    _deformer_form_super(form, "CRotationDeformerSource", ref_form, ref_src, ref_coord)
+    _text(rot, "f", "200.0", xs__n="handleLengthOnCanvas")
+    _text(rot, "f", "100.0", xs__n="circleRadiusOnCanvas")
+    _text(rot, "f", "0.0", xs__n="baseAngle")
+    return "CRotationDeformerSource", ref_src
+
+
+def _build_deformers(sh, rig, cw, ch, ref_coord, param_guid_ref, pidx, ref_part_root,
+                     deformer_guid, ref_deformer_root):
+    """Build every ``rig.deformers`` source. Returns ``[(tag, ref_source), ...]`` for the
+    ``CDeformerSourceSet``. Each deformer targets its parent deformer (or the root deformer)."""
+    out = []
+    for d in rig.deformers:
+        ref_self = deformer_guid[d.id]
+        ref_target = deformer_guid[d.parent] if d.parent is not None else ref_deformer_root
+        if d.type is DeformerType.warp:
+            out.append(_build_warp_deformer(
+                sh, rig, d, cw, ch, ref_coord, param_guid_ref, pidx, ref_part_root, ref_self, ref_target))
+        else:
+            out.append(_build_rotation_deformer(
+                sh, d, cw, ch, ref_coord, ref_part_root, ref_self, ref_target))
+    return out
 
 
 def _fill_kf_binding(el, ref_grid, ref_param_guid, keys, description) -> None:
@@ -705,7 +895,7 @@ def _fill_kf_binding(el, ref_grid, ref_param_guid, keys, description) -> None:
 
 def _build_art_mesh(
     sh, name, mesh, canvas_w, canvas_h, ref_part_root, ref_kfg_mesh, ref_ext_mesh, ref_emesh,
-    ref_coord, ref_tie, ref_drawable, ref_deformer_root, cell_forms, ref_tex2d,
+    ref_coord, ref_tie, ref_drawable, ref_deformer_target, cell_forms, ref_tex2d,
 ) -> str:
     mesh_src, ref_mesh = sh.add("CArtMeshSource")
 
@@ -760,7 +950,7 @@ def _build_art_mesh(
     _sub(pc, "null", xs__n="internalColor_direct_argb")
     _sub(ds, "CDrawableId", xs__n="id", idstr=name)
     _sub(ds, "CDrawableGuid", xs__n="guid", xs__ref=ref_drawable)
-    _sub(ds, "CDeformerGuid", xs__n="targetDeformerGuid", xs__ref=ref_deformer_root)
+    _sub(ds, "CDeformerGuid", xs__n="targetDeformerGuid", xs__ref=ref_deformer_target)
     _sub(ds, "carray_list", xs__n="clipGuidList", count="0")
     _text(ds, "b", "false", xs__n="invertClippingMask")
 
@@ -870,7 +1060,8 @@ def _fill_model_image_group(img_group, ref_li_guid, model_image_els) -> None:
         mi_list.append(mi)
 
 
-def _build_root_part(sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawable_refs, ref_part_form) -> str:
+def _build_root_part(sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawable_refs,
+                     deformer_refs, ref_part_form) -> str:
     part_src, ref_part_src = sh.add("CPartSource")
     pc = _sub(part_src, "ACParameterControllableSource", xs__n="super")
     _text(pc, "s", "Root Part", xs__n="localName")
@@ -890,9 +1081,12 @@ def _build_root_part(sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawabl
     _text(part_src, "i", "500", xs__n="defaultOrder_forEditor")
     _text(part_src, "b", "false", xs__n="isSketch")
     _sub(part_src, "CColor", xs__n="partsEditColor")
-    child_guids = _sub(part_src, "carray_list", xs__n="_childGuids", count=str(len(drawable_refs)))
+    child_guids = _sub(part_src, "carray_list", xs__n="_childGuids",
+                       count=str(len(drawable_refs) + len(deformer_refs)))
     for dref in drawable_refs:
         _sub(child_guids, "CDrawableGuid", xs__ref=dref)
+    for gref in deformer_refs:
+        _sub(child_guids, "CDeformerGuid", xs__ref=gref)
     _sub(part_src, "CDeformerGuid", xs__n="targetDeformerGuid", xs__ref=ref_deformer_root)
     kf_list = _sub(part_src, "carray_list", xs__n="keyforms", count="1")
     part_form = _sub(kf_list, "CPartForm")
@@ -909,7 +1103,7 @@ def _build_root_part(sh, ref_part_root, ref_kfg_part, ref_deformer_root, drawabl
 
 def _build_model_source(
     main_el, rig, ref_model, canvas_w, canvas_h, ref_param_group, param_guid_ref, mesh_refs,
-    ref_part_src, ref_li, ref_img_grp,
+    ref_part_src, ref_li, ref_img_grp, deformer_sources,
 ) -> None:
     model = _sub(main_el, "CModelSource", isDefaultKeyformLocked="true")
     _sub(model, "CModelGuid", xs__n="guid", xs__ref=ref_model)
@@ -950,7 +1144,9 @@ def _build_model_source(
         _sub(dsources, "CArtMeshSource", xs__ref=mref)
 
     deformer_set = _sub(model, "CDeformerSourceSet", xs__n="deformerSourceSet")
-    _sub(deformer_set, "carray_list", xs__n="_sources", count="0")
+    dsrc = _sub(deformer_set, "carray_list", xs__n="_sources", count=str(len(deformer_sources)))
+    for tag, ref in deformer_sources:
+        _sub(dsrc, tag, xs__ref=ref)
     affecter_set = _sub(model, "CAffecterSourceSet", xs__n="affecterSourceSet")
     _sub(affecter_set, "carray_list", xs__n="_sources", count="0")
 

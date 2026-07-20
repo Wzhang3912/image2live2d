@@ -188,13 +188,23 @@ def test_mouth_form_raises_corners_on_smile():
     assert frown[corner][1] < rest[corner][1]
 
 
-def test_breath_bobs_every_part_up():
+def test_breath_raises_the_upper_body_and_plants_the_feet():
+    """Breath lifts the chest/crown and leaves the ground contact planted. A uniform whole-figure bob
+    used to levitate the feet too (a hop, not a breath); the shift is now weighted 0 at the bottom of
+    the figure to full at the top, so nothing at the base moves and nothing ever moves down."""
     rig = _authored_rig()
     inhale = deform_at(rig, "ParamBreath", 1.0)
-    assert set(inhale) == rig.part_ids()  # affects all parts
+    assert set(inhale) == rig.part_ids()  # every part is still keyed
+    all_ys = [y for pid in inhale for _, y in rig.mesh_for(pid).vertices]
+    y0, span = min(all_ys), max(max(all_ys) - min(all_ys), 1e-9)
+    bottom_shift, top_shift = [], []
     for pid, positions in inhale.items():
-        rest = rig.mesh_for(pid).vertices
-        assert all(ny > ry for (_, ny), (_, ry) in zip(positions, rest))
+        for (_, ny), (_, ry) in zip(positions, rig.mesh_for(pid).vertices):
+            assert ny >= ry - 1e-9                       # nothing moves DOWN
+            frac = (ry - y0) / span
+            (bottom_shift if frac < 0.1 else top_shift if frac > 0.9 else []).append(ny - ry)
+    assert bottom_shift and max(bottom_shift) < 1e-6     # the base stays planted
+    assert top_shift and min(top_shift) > 0              # the top rises
 
 
 def test_authored_rig_is_clean_and_passes_sweep():

@@ -156,7 +156,7 @@ _MOUTH_CAP = 0.10     # max per-vertex mouth open/form shift (a mouth never need
 _DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more than this. Bounds the
 #                       remaining magnitude runaways (blink/hair/cloth/brow) when See-through emits an
 #                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
-_BREATH_SHIFT = 0.012 # whole-character upward bob (model units) at breath 1
+_BREATH_SHIFT = 0.008 # crown's upward bob (model units) at breath 1; tapers to 0 at the feet (see _breath)
 _ARM_DEG = 14.0       # arm swing degrees about the shoulder joint at the extreme
 # Legs are close together (feet only ~0.08 of canvas apart), so a swing that would look fine on an arm
 # converges the two feet past each other into a cross. A leg on a standing character barely moves
@@ -752,9 +752,21 @@ def _mouth_form(param_id: str, group: list[tuple[str, Mesh]], *, mouth_lm=None) 
 
 
 def _breath(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
-    """Subtle breathing: a gentle whole-character upward bob at breath=1 (rest at 0)."""
+    """Subtle breathing: the upper body rises at breath=1 while the FEET stay planted.
+
+    A uniform whole-character translate lifted the feet off the ground — a float/hop, not a breath (a
+    full-body character visibly levitated on every inhale). Real breathing expands the chest and barely
+    lifts the head; the ground contact never moves. So weight the upward shift by height over the
+    figure's own vertical extent: 0 at the feet, full at the crown. (Amplitude also pulled back toward
+    the ~0.1%-of-canvas a real rig like Hiyori uses; the old 1.2% read as a hop.)"""
+    ys = [y for _, m in group for _, y in m.vertices]
     rest = Keyform(value=0.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
-    inhale = Keyform(value=1.0, mesh_offsets={pid: _translate(m, 0.0, _BREATH_SHIFT) for pid, m in group})
+    if not ys:
+        return _set_keyforms(param_id, [rest])
+    y0, span = min(ys), max(max(ys) - min(ys), 1e-6)
+    inhale = Keyform(value=1.0, mesh_offsets={
+        pid: [(0.0, _BREATH_SHIFT * _clamp((y - y0) / span, 0.0, 1.0)) for _, y in m.vertices]
+        for pid, m in group})
     return _set_keyforms(param_id, [rest, inhale])
 
 

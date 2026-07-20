@@ -15,7 +15,12 @@ from .core import decompose, ingest, landmark, mesh, motion, physics, preprocess
 from .core.assemble import assemble_rig
 from .core.landmark import Landmarks
 from .core.rig import author_rig, select_template
-from .core.structure import normalize_face_zorder, split_bundled_pairs, split_fused_legs
+from .core.structure import (
+    normalize_face_zorder,
+    reassign_arm_mislabeled_as_leg,
+    split_bundled_pairs,
+    split_fused_legs,
+)
 from .core.types import LayerStack
 from .irr.schema import Rig
 
@@ -59,6 +64,7 @@ def prepare_meshes(stack: LayerStack):
     """
     _safe_synth(stack)                       # a mouth with no interior cannot open — paint one
     meshes = mesh.build_meshes(stack)
+    reassign_arm_mislabeled_as_leg(stack, meshes)  # arms the decomposer labelled 'leg' -> arm role
     split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
     split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
     _lift_occluded_accessories(stack, meshes)

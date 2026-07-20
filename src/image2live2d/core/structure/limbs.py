@@ -148,6 +148,71 @@ def _looks_like_arms(
     return True
 
 
+# --- arms the decomposer mislabelled as legs -------------------------------------------------------
+# See-through sometimes labels a character's ARMS as ``leg_l``/``leg_r`` — a slim figure with her arms at
+# her sides, a chibi with stubby arms — and the pipeline trusts the filename role, so the rig builds LEG
+# articulation on the arms and the character gets no arm motion at all (2 of 8 test characters). Roles are
+# re-derived from geometry everywhere else here; do the same. Two facts separate an arm from a leg, and
+# measured across 8 characters they hold with no overlap:
+#   * an arm attaches at the SHOULDER — its top sits at the head's base and never rises above the head;
+#   * an arm ends at the wrist MID-BODY — it does not reach the feet, whereas a leg runs to the floor.
+# Both are needed: the shoulder test alone would also catch drill-hair a decomposer mislabels "leg" (it
+# rises past the crown, so the "never above the head" clause rejects it); the foot test alone would catch
+# a raised arm. Deliberately strict — a false positive gives a leg shoulder/elbow articulation.
+_ARM_SHOULDER_MARGIN = 0.10  # the arm's top may sit at most this fraction of body height above the shoulder
+_ARM_FOOT_CLEARANCE = 0.20   # ...and its bottom must clear the feet by at least this much of body height
+
+
+def _leg_looks_like_arm(mesh: Mesh, *, head_box, body_box) -> bool:
+    """Is this LEG-labelled part geometrically an arm (attaches at the shoulder, stops above the feet)?"""
+    shoulder_y = head_box[1]                        # head bottom (y-up) — the shoulder line
+    by0, by1 = body_box[1], body_box[3]
+    height = max(by1 - by0, 1e-6)
+    x0, y0, x1, y1 = _bbox(mesh.vertices)           # y1 = top (max y-up), y0 = bottom (min y-up)
+    if (y1 - y0) <= (x1 - x0):
+        return False                                # a limb is slender; a wide blob is a garment
+    if y1 > shoulder_y + _ARM_SHOULDER_MARGIN * height:
+        return False                                # rises above the shoulder/head — a leg reaches only
+        #                                             the hip and drill-hair rises past the crown
+    if y0 < by0 + _ARM_FOOT_CLEARANCE * height:
+        return False                                # reaches down to the feet — that is a leg
+    return True
+
+
+def reassign_arm_mislabeled_as_leg(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
+    """Relabel ``leg_l``/``leg_r`` parts that are geometrically arms to ``arm_l``/``arm_r``. Mutates the
+    layers' roles in ``stack``; returns the ids re-roled. Run before the pair/leg splitters so the arms
+    flow through arm handling. A part keeps its own left/right side (the decomposer's L/R is position-
+    consistent here); the real legs, if fused into clothing, are a separate problem this does not touch."""
+    mesh_by_part = {m.part_id: m for m in meshes}
+    all_verts = [v for m in meshes for v in m.vertices]
+    if not all_verts:
+        return []
+    body_box = _bbox(all_verts)
+    head = [m for ly in stack.layers if (m := mesh_by_part.get(ly.id))
+            and ly.semantic_role in (SemanticRole.face_base, SemanticRole.neck)]
+    if not head:
+        return []                                   # no head to place the shoulder — don't guess
+    head_box = _bbox([v for m in head for v in m.vertices])
+
+    present = {ly.semantic_role for ly in stack.layers}
+    changed: list[str] = []
+    for layer in stack.layers:
+        if layer.semantic_role not in (SemanticRole.leg_l, SemanticRole.leg_r):
+            continue
+        mesh = mesh_by_part.get(layer.id)
+        if mesh is None or not _leg_looks_like_arm(mesh, head_box=head_box, body_box=body_box):
+            continue
+        new_role = (SemanticRole.arm_r if layer.semantic_role is SemanticRole.leg_r
+                    else SemanticRole.arm_l)
+        if new_role in present:
+            continue                                # that side already has a real arm — don't duplicate
+        layer.semantic_role = new_role
+        present.add(new_role)
+        changed.append(layer.id)
+    return changed
+
+
 def _leg_seam(mesh: Mesh, *, body_box) -> float | None:
     """The x of the seam between two fused legs — or ``None`` if this part is not a pair of legs.
 

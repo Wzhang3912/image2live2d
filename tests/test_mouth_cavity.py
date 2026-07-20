@@ -172,6 +172,30 @@ def test_a_mouth_already_drawn_open_is_left_alone(tmp_path):
     assert not stack.by_role(R.mouth_cavity)
 
 
+def test_a_tall_but_light_closed_smile_still_gets_a_cavity(tmp_path):
+    """A closed smile with lip shading has a tall solid box (aspect > the closed threshold) yet is
+    plainly shut — no dark oral cavity, just lip/skin tones. Aspect alone wrongly called it 'open' and
+    denied it an interior (5 of 8 test characters could not open their mouths). It's only open if the box
+    is tall AND holds a genuine dark interior, so a light tall smile must still be synthesised."""
+    from PIL import Image, ImageDraw
+
+    d = tmp_path / "layers"
+    d.mkdir()
+    face = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(face).rectangle([30, 20, 98, 110], fill=(250, 220, 205, 255))
+    face.save(d / "00_face_base.png")
+    # a tall mouth SHAPE (20x16, aspect 0.8 — well over the closed threshold) but LIGHT: a soft lip tone
+    # barely darker than skin, no dark cavity. This is the closed-smile-with-shading the aspect gate hit.
+    smile = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(smile).ellipse([56, 80, 76, 96], fill=(235, 200, 195, 255))
+    smile.save(d / "20_mouth.png")
+
+    stack = decompose.from_layer_dir(d)
+    layer = synthesize_mouth_cavity(stack)
+    assert layer is not None                                # tall but light -> closed -> gets a cavity
+    assert stack.by_role(R.mouth_cavity)
+
+
 def test_faint_full_canvas_scatter_does_not_suppress_the_cavity(tmp_path):
     """A See-through mouth layer carries a near-transparent halo (alpha 8-63) dusted across the whole
     canvas. PIL's raw getbbox() — anything > 0 — then returned the ENTIRE canvas, so a thin closed lip

@@ -214,18 +214,20 @@ def test_end_to_end_synthetic_dir_to_inp(tmp_path):
 
     layer_dir = tmp_path / "layers"
     layer_dir.mkdir()
-    # full-canvas RGBA layers with a centred opaque blob per part
+    # full-canvas RGBA layers with a centred opaque blob per part. The mouth is a DARK block so it reads
+    # as already-drawn-open (a real oral cavity, much darker than skin), not a light closed smile.
     for name in ("00_face_base", "10_eye_l", "11_eye_r", "20_mouth"):
         img = Image.new("RGBA", (64, 64), (255, 0, 0, 0))
+        color = (40, 20, 25, 255) if name == "20_mouth" else (200, 120, 120, 255)
         for x in range(20, 44):
             for y in range(20, 44):
-                img.putpixel((x, y), (200, 120, 120, 255))
+                img.putpixel((x, y), color)
         img.save(layer_dir / f"{name}.png")
 
     stack = decompose.from_layer_dir(layer_dir)
     rig = rig_from_stack(stack, name="synthetic", source="synthetic")
-    # no synthesised cavity here: this stub mouth is a solid 40x20 block, not a thin lip line, so
-    # core.synth reads it as a mouth already drawn open and leaves the artist's own interior alone
+    # no synthesised cavity here: this stub mouth is a solid DARK block, so core.synth reads it as a
+    # mouth already drawn open (tall AND a genuine dark interior) and leaves the artist's own alone
     assert rig.part_ids() == {"00_face_base", "10_eye_l", "11_eye_r", "20_mouth"}
     assert "ParamMouthOpenY" in rig.parameter_ids()
 

@@ -25,6 +25,19 @@ from ...irr.schema import Mesh, SemanticRole, Vec2
 # speckle / antialiasing island), not a real strand — its vertices fold into the nearest real lobe.
 _MIN_COMPONENT_FRAC = 0.1
 
+# --- Bottom-contour strand-tip detection ----------------------------------------------------------
+# A connected hair sheet usually hangs in several distinct LOCKS — a fringe parted into strands, a
+# ponytail splitting toward its tip — with no alpha gap between them, so connected-components sees ONE
+# strand and the whole sheet swings as a single rigid blob. The locks show up as separate low points
+# ("tips") along the sheet's BOTTOM contour. Detect them as prominent local maxima of the box-smoothed
+# bottom edge and split the lobe's vertices to the nearest tip, so each lock gets its own pendulum.
+# (Adapted from Anime2.5DRig's detectStrands; we read the contour off the mesh grid, not the raw alpha.)
+_TIP_BINS = 64                # x-resolution of the bottom contour
+_TIP_SMOOTH = 9              # box-smoothing window over the bins (kills antialiasing wobble)
+_TIP_MIN_PROMINENCE = 0.18   # a tip must dip this far (fraction of the lobe height) below its saddle
+_TIP_MIN_SEPARATION = 6      # bins two tips must be apart — merges locks that are basically one
+_TIP_MAX = 6                 # never more than this many strands from one lobe
+
 # Base pendulum tuning per hair role. These are exactly the pre-P2 physics._HAIR_TUNING values, so one
 # strand of a role reproduces the old physics rig verbatim: back hair heavy/slow, front fringe light.
 HAIR_BASE_TUNING: dict[SemanticRole, tuple[str, tuple[float, float, float]]] = {
@@ -113,6 +126,87 @@ def mesh_components(mesh: Mesh) -> list[list[int]]:
     return labels
 
 
+def _bottom_contour(verts: list[Vec2], x0: float, span: float) -> list[float | None]:
+    """The lowest (max-y; our y is y-DOWN so the hair tips are at large y) point per x-bin over
+    ``verts``, as a ``_TIP_BINS``-long list. Empty bins are ``None`` (filled by the caller)."""
+    contour: list[float | None] = [None] * _TIP_BINS
+    for x, y in verts:
+        b = min(_TIP_BINS - 1, int((x - x0) / span * _TIP_BINS))
+        if contour[b] is None or y > contour[b]:
+            contour[b] = y
+    return contour
+
+
+def _smooth_filled(contour: list[float | None]) -> list[float]:
+    """Fill empty bins by nearest-neighbour hold, then box-smooth by ``_TIP_SMOOTH`` — a clean 1-D
+    bottom edge to find tips on."""
+    filled: list[float] = []
+    last = next((c for c in contour if c is not None), 0.0)
+    for c in contour:
+        last = c if c is not None else last
+        filled.append(last)
+    k = _TIP_SMOOTH
+    out = []
+    for i in range(len(filled)):
+        lo, hi = max(0, i - k // 2), min(len(filled), i + k // 2 + 1)
+        out.append(sum(filled[lo:hi]) / (hi - lo))
+    return out
+
+
+def _tip_bins(contour: list[float]) -> list[int]:
+    """Bins that are prominent local maxima (hair tips) of the smoothed bottom contour: a peak whose
+    drop to the higher of its flanking valleys is at least ``_TIP_MIN_PROMINENCE`` of the contour's
+    total height. Peaks closer than ``_TIP_MIN_SEPARATION`` bins are merged (the lower one drops)."""
+    lo, hi = min(contour), max(contour)
+    height = hi - lo
+    if height <= 0:
+        return []
+    peaks = [i for i in range(1, len(contour) - 1)
+             if contour[i] >= contour[i - 1] and contour[i] > contour[i + 1]]
+    prominent = []
+    for i in peaks:
+        left = min(contour[:i]) if i else contour[i]
+        right = min(contour[i + 1:]) if i + 1 < len(contour) else contour[i]
+        if (contour[i] - max(left, right)) >= _TIP_MIN_PROMINENCE * height:
+            prominent.append(i)
+    # merge near-duplicates, keeping the lower-hanging (larger y) tip
+    prominent.sort()
+    merged: list[int] = []
+    for i in prominent:
+        if merged and i - merged[-1] < _TIP_MIN_SEPARATION:
+            if contour[i] > contour[merged[-1]]:
+                merged[-1] = i
+        else:
+            merged.append(i)
+    # keep the deepest-hanging tips if there are more than the cap
+    merged.sort(key=lambda i: -contour[i])
+    return sorted(merged[:_TIP_MAX])
+
+
+def split_lobe_by_tips(mesh: Mesh, indices: list[int]) -> list[list[int]]:
+    """Split one connected hair lobe into per-lock strands by its bottom-contour tips (see the block
+    comment above). Returns ``[indices]`` unchanged when fewer than two prominent tips are found — a
+    round bun or a single lock is never force-split. Otherwise partitions every vertex to the nearest
+    tip in x, so each lock owns a contiguous slice of the sheet."""
+    verts = [mesh.vertices[i] for i in indices]
+    xs = [x for x, _ in verts]
+    x0, x1 = min(xs), max(xs)
+    span = x1 - x0
+    if span <= 1e-6 or len(indices) < 2 * _TIP_MIN_SEPARATION:
+        return [indices]
+    tip_bins = _tip_bins(_smooth_filled(_bottom_contour(verts, x0, span)))
+    if len(tip_bins) < 2:
+        return [indices]
+    tip_xs = [x0 + (b + 0.5) / _TIP_BINS * span for b in tip_bins]
+    groups: list[list[int]] = [[] for _ in tip_xs]
+    for i in indices:
+        vx = mesh.vertices[i][0]
+        k = min(range(len(tip_xs)), key=lambda j: abs(vx - tip_xs[j]))
+        groups[k].append(i)
+    # a tip that captured no vertices (rare, adjacent tips) is dropped; keep non-empty locks in x order
+    return [g for _, g in sorted(zip(tip_xs, groups)) if g]
+
+
 def strand_param_id(base: str, index: int) -> str:
     """First part keeps the base id; extras get a 1-based numeric suffix (base, base2, base3, …)."""
     return base if index == 0 else f"{base}{index + 1}"
@@ -134,13 +228,17 @@ def hair_strands(stack: LayerStack, meshes: list[Mesh]) -> list[StrandSpec]:
         if ly.semantic_role not in HAIR_BASE_TUNING or ly.id not in mbp:
             continue
         m = mbp[ly.id]
-        comps = mesh_components(m)
-        if len(comps) <= 1:
+        # First split by connected components (alpha gaps: twin-tails fused into one layer), then split
+        # each connected lobe again by its bottom-contour tips (locks with no gap between them).
+        sublobes: list[list[int]] = []
+        for comp in mesh_components(m):
+            sublobes.extend(split_lobe_by_tips(m, comp))
+        if len(sublobes) <= 1:
             units[ly.semantic_role].append((ly.id, None, _height_of(m.vertices)))
         else:
-            for comp in comps:
-                h = _height_of([m.vertices[i] for i in comp])
-                units[ly.semantic_role].append((ly.id, comp, h))
+            for sub in sublobes:
+                h = _height_of([m.vertices[i] for i in sub])
+                units[ly.semantic_role].append((ly.id, sub, h))
 
     specs: list[StrandSpec] = []
     for role, (base, (m0, d0, l0)) in HAIR_BASE_TUNING.items():

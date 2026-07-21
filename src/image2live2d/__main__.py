@@ -78,6 +78,14 @@ def main(argv: list[str] | None = None) -> int:
         "(model3/physics3/motion3/cdi3) until a .moc3 template is supplied — see docs/PHASE4_PLAN.md",
     )
     parser.add_argument(
+        "--cmo3",
+        nargs="?",
+        const="",
+        metavar="FILE",
+        help="also emit an editable Cubism Editor project (.cmo3) to FILE (default ./<name>.cmo3). "
+        "Open it in Cubism Editor 5.0 to validate — see docs/CMO3_EDITOR_VALIDATION.md",
+    )
+    parser.add_argument(
         "--landmarks",
         nargs="?",
         const="",
@@ -226,6 +234,15 @@ def main(argv: list[str] | None = None) -> int:
         bundle = Live2DEmitter(asset_root=asset_root).build(rig, l2d_dir)
         moc = "yes" if bundle.moc_written else "stub (needs a .moc3 template — see docs/PHASE4_PLAN.md)"
         print(f"  wrote Live2D bundle -> {bundle.model3_path}  ({len(bundle.files)} files, moc3={moc})")
+
+    if args.cmo3 is not None:
+        from .backends.live2d.cmo3 import rig_to_cmo3
+
+        cmo3_path = Path(args.cmo3) if args.cmo3 else out.parent / f"{name}.cmo3"
+        cmo3_path.write_bytes(rig_to_cmo3(rig, asset_root=asset_root))
+        deformers = "head-turn warp" if any(d.id == "deform_head_turn" for d in rig.deformers) else "none"
+        print(f"  wrote editable Cubism project -> {cmo3_path}  "
+              f"(deformers={deformers}, physics={len(rig.physics)} chains) — validate in Editor 5.0")
 
     print(
         "  open in nijigenerate and drive: ParamEyeLOpen / ParamMouthOpenY / ParamAngleX "

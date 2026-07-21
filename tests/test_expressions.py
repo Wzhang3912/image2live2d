@@ -33,11 +33,12 @@ def _face_params():
                             draw_order=i * 10, width=64, height=64))
         meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=2))
     stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
-    return stack, meshes, author_rig(stack, meshes, select_template(stack)).parameters
+    return stack, meshes, author_rig(stack, meshes, select_template(stack))
 
 
 def test_full_sheet_authored_for_a_full_face():
-    _, _, params = _face_params()
+    _, _, auth = _face_params()
+    params = auth.parameters
     anims = {a.name: a for a in generate_expressions(params)}
     assert set(anims) == set(EXPRESSION_NAMES)               # every expression applies to a full face
     for a in anims.values():
@@ -47,7 +48,8 @@ def test_full_sheet_authored_for_a_full_face():
 
 
 def test_pose_eases_from_default_and_holds():
-    _, _, params = _face_params()
+    _, _, auth = _face_params()
+    params = auth.parameters
     smile = next(a for a in generate_expressions(params) if a.name == "smile")
     form = next(ln for ln in smile.lanes if ln.param_id == "ParamMouthForm")
     frames = [(k.frame, k.value) for k in form.keyframes]
@@ -75,10 +77,12 @@ def test_no_face_params_no_expressions():
 
 
 def test_expressions_emit_on_both_backends():
-    stack, meshes, params = _face_params()
+    stack, meshes, auth = _face_params()
+    params = auth.parameters
     anims = generate_idle(params) + generate_expressions(params)
-    rig = assemble_rig(name="x", source=None, stack=stack, meshes=meshes, deformers=[],
-                       parameters=params, physics=[], animations=anims)
+    rig = assemble_rig(name="x", source=None, stack=stack, meshes=meshes, deformers=auth.deformers,
+                       parameters=params, physics=[], animations=anims,
+                       part_deformers=auth.part_deformers)
     puppet = build_puppet(rig).puppet
     name_by_uuid = {p["uuid"]: p["name"] for p in puppet["param"]}
     for name in EXPRESSION_NAMES:

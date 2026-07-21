@@ -79,6 +79,7 @@ def _authored_rig():
         parameters=authoring.parameters,
         physics=[],
         archetype=template.name,
+        part_deformers=authoring.part_deformers,
     )
 
 
@@ -163,17 +164,22 @@ def test_mouth_open_is_a_lens_cavity():
 
 
 def test_head_turn_is_delegated_to_the_backend_not_baked():
-    # The head turn used to be baked as per-vertex face_base offsets here. It is now synthesised by each
-    # backend (Live2D warp grid / nijilive group-node rotation) from head-group membership, so the IRR
-    # carries only the keyform SCAFFOLD — the parameter and its key values, with no offsets. Baking a
-    # sphere warp here as well would double-apply the turn. (That the emitted warp really turns the face
-    # — a coherent per-vertex warp, not a uniform slide — is pinned by tests/test_head_turn.py, which
-    # drives the actual grid.)
+    # The two RUNTIME backends synthesise the head turn themselves (Live2D warp grid / nijilive group-node
+    # rotation) from head-group membership and read neither Rig.deformers nor deformer_offsets, so the head
+    # turn must NOT be baked into the head meshes' per-vertex offsets — doing so would double-apply it. The
+    # IRR instead carries a head-turn WARP DEFORMER (consumed only by the .cmo3 editable-project backend):
+    # ParamAngle* drive it via deformer_offsets, while their mesh_offsets stay empty, so the .moc3/.inp are
+    # unchanged. (The emitted moc3 warp is pinned separately by tests/test_head_turn.py.)
     rig = _authored_rig()
     ax = next(p for p in rig.parameters if p.id == "ParamAngleX")
-    assert [k.value for k in ax.keyforms] == [ax.min, ax.default, ax.max]   # scaffold present
-    assert not any(kf.mesh_offsets for kf in ax.keyforms)                   # no baked per-vertex turn
-    assert deform_at(rig, "ParamAngleX", 30.0) == {}                        # nothing deformed at IRR level
+    assert [k.value for k in ax.keyforms] == [ax.min, ax.default, ax.max]   # key values present
+    assert not any(kf.mesh_offsets for kf in ax.keyforms)                   # no baked per-vertex turn...
+    assert deform_at(rig, "ParamAngleX", 30.0) == {}                        # ...so nothing mesh-deforms
+    # ...but a head-turn warp deformer exists and ParamAngleX drives it (for the .cmo3 backend).
+    warp = next((d for d in rig.deformers if d.id == "deform_head_turn"), None)
+    assert warp is not None and warp.type.value == "warp"
+    assert any(kf.deformer_offsets.get("deform_head_turn") for kf in ax.keyforms)
+    assert {p.id for p in rig.parts if p.parent_deformer == "deform_head_turn"}  # head parts parented
 
 
 def test_mouth_form_raises_corners_on_smile():

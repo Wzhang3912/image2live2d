@@ -50,6 +50,7 @@ def rig_from_stack(stack: LayerStack, *, name: str, source: str | None = None) -
         physics=phys,
         archetype=template.name,
         animations=anims,
+        part_deformers=authoring.part_deformers,
     )
 
 

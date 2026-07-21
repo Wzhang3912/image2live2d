@@ -67,3 +67,24 @@ def test_cli_sample_emits_loadable_inp(tmp_path):
     assert len(inp.textures) == 15          # 12 decomposed + mouth cavity + 2 closed-eye lash lines
     assert puppet["meta"]["name"] == "sample"
     assert {"ParamMouthOpenY", "ParamEyeLOpen"} <= {p["name"] for p in puppet["param"]}
+
+
+def test_cli_sample_emits_cmo3_with_head_turn(tmp_path):
+    from image2live2d.__main__ import main
+    from image2live2d.backends.live2d.cmo3 import unpack_caff
+
+    cmo3 = tmp_path / "sample.cmo3"
+    rc = main(["--sample", str(tmp_path / "layers"), "-o", str(tmp_path / "sample.inp"),
+               "--cmo3", str(cmo3)])
+    assert rc == 0 and cmo3.exists()
+
+    entries = unpack_caff(cmo3.read_bytes())
+    paths = {e.path for e in entries}
+    assert "main.xml" in paths
+    main_xml = next(e for e in entries if e.path == "main.xml").content.decode()
+    # the head-turn warp deformer reaches the editable project (the gap this closed)
+    assert "deform_head_turn" in main_xml
+    assert "CWarpDeformerSource" in main_xml
+    # the sample has hair/skirt physics -> the v14 physics graph
+    assert "physicsSettingsSourceSet" in main_xml
+    assert "<?version CModelSource:14?>" in main_xml

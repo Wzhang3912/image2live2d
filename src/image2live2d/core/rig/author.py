@@ -24,8 +24,11 @@ What we author for a portrait:
 * ``ParamEyeBallX`` / ``ParamEyeBallY`` — pupil look (translate pupils).
 * ``ParamBrowLY`` / ``ParamBrowRY`` — brow raise.
 
-Motion is baked as per-vertex mesh offsets in keyforms (no warp/rotation deformers yet), which keeps
-the MVP backend-agnostic. ``deformers`` is therefore empty for now.
+Most motion is baked as per-vertex mesh offsets in keyforms, which keeps it backend-agnostic (the moc3
+and nijilive runtimes read only the mesh offsets). The one exception is the head turn: it is *also*
+authored as a WARP ``Deformer`` (``deformers`` is no longer empty), carried in the ``deformer_offsets``
+channel that only the editable-project (.cmo3) backend consumes — the two runtime backends synthesize
+their own head turn and ignore it, so the .moc3/.inp are unchanged. See the head-turn note below.
 """
 
 from __future__ import annotations
@@ -48,6 +51,9 @@ from ..structure.strands import hair_strands
 from ..types import LayerStack
 from ...irr.params import make_parameter
 from ...irr.schema import Deformer, DeformerType, Keyform, Mesh, Parameter, SemanticRole, Vec2
+from .head_rigidity import PROTECT as _PROTECT
+from .head_rigidity import regions_from as _rigidity_regions
+from .head_rigidity import rigidity_field as _rigidity_field
 
 # --------------------------------------------------------------------------------------------------
 # Template selection
@@ -271,8 +277,18 @@ def author_rig(
     if head:
         # The grid spans the whole head (hair included); the squash is anchored on the face parts only.
         face = members(*(_HEAD_ROLES - _HAIR_ROLES))
+        # Protected-region bboxes (eyes/nose/mouth): the warp keeps them rigid so they don't foreshorten
+        # with the head — the same T5 fix the moc3 backend applies, sharing head_rigidity.PROTECT.
+        prot = {}
+        for _rn in _PROTECT:
+            _pm = members(SemanticRole[_rn])
+            if _pm:
+                _pxs = [x for _, m in _pm for x, _ in m.vertices]
+                _pys = [y for _, m in _pm for _, y in m.vertices]
+                if _pxs:
+                    prot[_rn] = (min(_pxs), min(_pys), max(_pxs), max(_pys))
         warp, turn_params = _head_turn_warp(
-            [m for _, m in head], [m for _, m in face] or [m for _, m in head])
+            [m for _, m in head], [m for _, m in face] or [m for _, m in head], prot)
         deformers.append(warp)
         params.extend(turn_params)
         for pid, _ in head:
@@ -472,6 +488,7 @@ def _cap_cell(cell: list[Vec2]) -> list[Vec2]:
 
 def _head_turn_warp(
     head_meshes: list[Mesh], face_meshes: list[Mesh],
+    protected: dict[str, tuple[float, float, float, float]] | None = None,
 ) -> tuple[Deformer, list[Parameter]]:
     """A head-turn WARP deformer for the .cmo3 backend: an ``N x N`` control lattice over the head bbox
     whose points move per ParamAngleX/Y/Z. Yaw/pitch are the same pivot-anchored pseudo-3D sphere squash
@@ -481,6 +498,8 @@ def _head_turn_warp(
 
     The lattice spans ``head_meshes`` (hair carried along) but the squash sphere is sized from
     ``face_meshes`` — anchoring the pivot on the face, not a hair-inflated union bbox (see ``_HAIR_ROLES``).
+    ``protected`` (role -> bbox) keeps the eyes/nose/mouth rigid under the squash — the same T5 fix the
+    moc3 warp applies, sharing :mod:`head_rigidity` so both backends foreshorten the face identically.
     """
     x0, y0, x1, y1 = _union_bbox(head_meshes)          # grid extent: the whole head
     fx0, fy0, fx1, fy1 = _union_bbox(face_meshes)       # squash anchor: the face ball only
@@ -492,17 +511,26 @@ def _head_turn_warp(
     ]
     rx = max(cx - fx0, fx1 - cx, 1e-6)   # sphere radius = face half-extent (not the hair-inflated head)
     ry = max(cy - fy0, fy1 - cy, 1e-6)
+    rigid = _rigidity_field(lattice, _rigidity_regions(protected or {}))
 
     def squash(a: float, axis: str) -> list[Vec2]:
         shift = (rx if axis == "x" else ry) * math.sin(a)   # anchor the pivot (see _head_turn)
-        cell: list[Vec2] = []
-        for x, y in lattice:
+
+        def delta(x: float, y: float) -> Vec2:
             if axis == "x":
                 phi = math.asin(_clamp((x - cx) / rx, -1.0, 1.0))
-                cell.append((cx + rx * math.sin(phi + a) - x - shift, 0.0))
-            else:
-                psi = math.asin(_clamp((y - cy) / ry, -1.0, 1.0))
-                cell.append((0.0, cy + ry * math.sin(psi + a) - y - shift))
+                return (cx + rx * math.sin(phi + a) - x - shift, 0.0)
+            psi = math.asin(_clamp((y - cy) / ry, -1.0, 1.0))
+            return (0.0, cy + ry * math.sin(psi + a) - y - shift)
+
+        cell: list[Vec2] = []
+        for (x, y), (w, ccx, ccy) in zip(lattice, rigid):
+            dx, dy = delta(x, y)
+            if w > 0.0:
+                # Rigid: the whole feature shifts by its centroid's OWN squash delta, so it never narrows.
+                rdx, rdy = delta(ccx, ccy)
+                dx, dy = dx * (1.0 - w) + rdx * w, dy * (1.0 - w) + rdy * w
+            cell.append((dx, dy))
         return _cap_cell(cell)
 
     def roll(frac: float) -> list[Vec2]:

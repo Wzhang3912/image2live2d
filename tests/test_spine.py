@@ -182,6 +182,36 @@ def test_head_turn_is_delegated_to_the_backend_not_baked():
     assert {p.id for p in rig.parts if p.parent_deformer == "deform_head_turn"}  # head parts parented
 
 
+def test_cmo3_head_warp_pivots_on_the_face_not_the_hair():
+    # StretchyStudio's worst bug: a union bbox (hair+face) as the chin proxy drops the pivot below the
+    # neck when hair is long. The head-turn warp's squash must anchor on the FACE, so the pitch pivot
+    # (the lattice row with ~zero vertical displacement at full ParamAngleY) sits at the face, not at the
+    # hair-dragged union centre.
+    parts = [("face_base", SemanticRole.face_base, (0.35, 0.60, 0.65, 0.90)),
+             ("eye_l", SemanticRole.eye_l, (0.40, 0.72, 0.48, 0.80)),
+             ("mouth", SemanticRole.mouth, (0.45, 0.64, 0.55, 0.68)),
+             ("hair_back", SemanticRole.hair_back, (0.28, 0.05, 0.72, 0.90))]  # floor-length drape
+    layers, meshes = [], []
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=100, height=100))
+        meshes.append(grid_mesh(pid, rect, _opaque, grid=2))
+    stack = LayerStack(layers=layers, canvas_width=100, canvas_height=100)
+    auth = author_rig(stack, meshes, select_template(stack))
+    warp = next(d for d in auth.deformers if d.id == "deform_head_turn")
+    ay = next(p for p in auth.parameters if p.id == "ParamAngleY")
+    dy = ay.keyforms[-1].deformer_offsets["deform_head_turn"]  # ParamAngleY = max (full pitch)
+    n = warp.grid_rows
+    # mean |vertical displacement| per lattice row; the pivot row has the smallest.
+    rows = [(sum(warp.grid_vertices[r * n + c][1] for c in range(n)) / n,          # row y
+             sum(abs(dy[r * n + c][1]) for c in range(n)) / n)                      # row |mean d-y|
+            for r in range(n)]
+    pivot_y = min(rows, key=lambda ry: ry[1])[0]
+    face_cy = (0.60 + 0.90) / 2.0        # face bbox centre y
+    union_cy = (0.05 + 0.90) / 2.0       # union (incl. floor hair) centre y — the buggy pivot
+    assert abs(pivot_y - face_cy) < abs(pivot_y - union_cy)   # anchored on the face, not the hair
+
+
 def test_mouth_form_raises_corners_on_smile():
     rig = _authored_rig()
     rest = rig.mesh_for("mouth").vertices

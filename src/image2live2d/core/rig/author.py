@@ -111,6 +111,11 @@ _HEAD_TURN_Y = 0.42   # pitch radians (vertical squash) at full ParamAngleY
 _HEAD_Z_DEG = 20.0    # head roll degrees at full ParamAngleZ
 _HEAD_WARP_ID = "deform_head_turn"
 _HEAD_GRID = 4        # NxN control lattice over the head bbox (N-1 x N-1 warp segments)
+# The head-turn squash is anchored on the FACE ball, not the whole head group: long hair inflates the
+# union bbox and drops the pivot below the chin (the head then rotates about a point near the hair tips).
+# So exclude hair when sizing the squash sphere — the grid still spans the head so hair is carried along.
+# Mirrors the moc3 emitter's face-only pivot. See RIVAL_HARVEST_BACKLOG T1.
+_HAIR_ROLES = frozenset({SemanticRole.hair_front, SemanticRole.hair_side, SemanticRole.hair_back})
 _SWAY_TAPER = 2.0     # how the swing grows from root to tip, as depth**_SWAY_TAPER. Hair is a
 #                       cantilever: it is *stiff where it is attached* and free at the ends, and a beam
 #                       clamped at one end deflects quadratically along its length. The taper used to be
@@ -264,9 +269,10 @@ def author_rig(
     part_deformers: dict[str, str] = {}
     head = members(*_HEAD_ROLES) + head_acc
     if head:
+        # The grid spans the whole head (hair included); the squash is anchored on the face parts only.
+        face = members(*(_HEAD_ROLES - _HAIR_ROLES))
         warp, turn_params = _head_turn_warp(
-            [m for _, m in head], _union_center([m for _, m in head]),
-            _union_bbox([m for _, m in head]))
+            [m for _, m in head], [m for _, m in face] or [m for _, m in head])
         deformers.append(warp)
         params.extend(turn_params)
         for pid, _ in head:
@@ -465,23 +471,27 @@ def _cap_cell(cell: list[Vec2]) -> list[Vec2]:
 
 
 def _head_turn_warp(
-    head_meshes: list[Mesh], center: Vec2, bbox: tuple[float, float, float, float],
+    head_meshes: list[Mesh], face_meshes: list[Mesh],
 ) -> tuple[Deformer, list[Parameter]]:
     """A head-turn WARP deformer for the .cmo3 backend: an ``N x N`` control lattice over the head bbox
     whose points move per ParamAngleX/Y/Z. Yaw/pitch are the same pivot-anchored pseudo-3D sphere squash
     as :func:`_head_turn` (features foreshorten around a fixed centre); roll is an in-plane rotation. The
     two runtime backends read neither this deformer nor its ``deformer_offsets``, so nothing changes for
     them (see the head-turn note in :func:`author_rig`).
+
+    The lattice spans ``head_meshes`` (hair carried along) but the squash sphere is sized from
+    ``face_meshes`` — anchoring the pivot on the face, not a hair-inflated union bbox (see ``_HAIR_ROLES``).
     """
-    cx, cy = center
-    x0, y0, x1, y1 = bbox
+    x0, y0, x1, y1 = _union_bbox(head_meshes)          # grid extent: the whole head
+    fx0, fy0, fx1, fy1 = _union_bbox(face_meshes)       # squash anchor: the face ball only
+    cx, cy = (fx0 + fx1) / 2.0, (fy0 + fy1) / 2.0
     n = _HEAD_GRID
     lattice: list[Vec2] = [
         (x0 + (x1 - x0) * c / (n - 1), y0 + (y1 - y0) * r / (n - 1))
         for r in range(n) for c in range(n)
     ]
-    rx = max(cx - x0, x1 - cx, 1e-6)
-    ry = max(cy - y0, y1 - cy, 1e-6)
+    rx = max(cx - fx0, fx1 - cx, 1e-6)   # sphere radius = face half-extent (not the hair-inflated head)
+    ry = max(cy - fy0, fy1 - cy, 1e-6)
 
     def squash(a: float, axis: str) -> list[Vec2]:
         shift = (rx if axis == "x" else ry) * math.sin(a)   # anchor the pivot (see _head_turn)

@@ -16,8 +16,68 @@ that turns and a face that squashes.
 from __future__ import annotations
 
 import math
+import sys
+from pathlib import Path
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "tools"))
+
+
+def _have_core() -> bool:
+    try:
+        import cubism_core
+        cubism_core.find_core()
+        return True
+    except Exception:
+        return False
+
+
+def _emit_sample_moc3(tmp_path):
+    """Emit the sample rig to a real binary .moc3 on disk and return its path."""
+    pytest.importorskip("PIL")
+    from image2live2d.backends.live2d.moc3_binary import write_moc3
+    from image2live2d.backends.live2d.moc3_emit import rig_to_moc3
+    from image2live2d.core import decompose
+    from image2live2d.pipeline import rig_from_stack
+    from image2live2d.samples import make_sample_layers
+
+    rig = rig_from_stack(decompose.from_layer_dir(make_sample_layers(tmp_path / "src")), name="t")
+    path = tmp_path / "m.moc3"
+    path.write_bytes(write_moc3(rig_to_moc3(rig)))
+    return path
+
+
+@pytest.mark.skipif(not _have_core(), reason="Live2DCubismCore not found (set CUBISM_CORE); proprietary")
+def test_eyes_stay_rigid_while_the_head_narrows_at_the_yaw_extreme(tmp_path):
+    """Runtime-truth for RIVAL_HARVEST_BACKLOG T5. Without protected-region rigidity the yaw squash
+    collapsed the far eye to ~0.64 of its width (and folded the face grid) — the very feature-distortion
+    the rivals warned of. The eyes must now stay near-rigid (they don't foreshorten with the head), while
+    the head as a whole still narrows so the turn still reads."""
+    import cubism_core
+
+    m = cubism_core.Model(str(_emit_sample_moc3(tmp_path)))    # ctor also runs csmHasMocConsistency
+
+    def widths():
+        pos = {did: v for did, v in zip(m._draw_ids, m._positions())}
+        def w(did):
+            xs = [x for x, _ in pos[did]]
+            return max(xs) - min(xs)
+        return w
+
+    m.reset()
+    w0 = widths()
+    m.set_param("ParamAngleX", 30.0)
+    m.update()
+    w1 = widths()
+    m.reset()
+    eye_ids = [d for d in m._draw_ids if d.endswith(("eye_l", "eye_r"))]
+    assert eye_ids, "sample rig exposes no eye drawables"
+    # every eye stays near its rest width (rigid) — comfortably above the ~0.64 pre-fix collapse
+    for did in eye_ids:
+        assert w1(did) / w0(did) > 0.85, f"{did} collapsed to {w1(did) / w0(did):.3f} of its width"
+    # the face base still foreshortens — the turn is a turn, not a rigid slab
+    assert w1("00_face_base") / w0("00_face_base") < 0.995
 
 
 def _head_warp(tmp_path):

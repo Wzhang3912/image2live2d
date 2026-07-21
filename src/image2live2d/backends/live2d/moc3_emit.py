@@ -390,6 +390,7 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
     # through it -> smooth turn, the neck stretches, nothing tears, and the face never shears. Art meshes
     # keep their own (eye/mouth/face-feature) keyforms in the deformer's local space.
     from ..nijilive.puppet import head_group_ids  # noqa: PLC0415  (avoid top import cycle)
+    from ...core.rig.head_rigidity import PROTECT, regions_from, rigidity_field  # noqa: PLC0415
     from ...irr.schema import SemanticRole as _SR  # noqa: PLC0415
     _dm = [(p, rig.mesh_for(p.id)) for p in drawn]
     head_ids = head_group_ids(_dm)
@@ -491,6 +492,17 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
             ROWS = COLS = 12                                             # fine grid -> smooth squash
             rest = [(bx0 + bw * c / COLS, by0 + bh * r / ROWS)
                     for r in range(ROWS + 1) for c in range(COLS + 1)]   # row-major, r outer / c inner
+            # Protected-region rigidity (RIVAL_HARVEST_BACKLOG T5): keep the eyes (and, partly, the
+            # nose/mouth) from foreshortening with the head. Field is constant across keyforms — it's the
+            # rest grid's geometry — so compute it once. Feature bboxes come from this warp's own children.
+            _rbb: dict[str, tuple[float, float, float, float]] = {}
+            for _p, _m in _dm:
+                if _p.id in part_ids and _p.semantic_role.value in PROTECT:
+                    _rxs = [v[0] for v in _m.vertices]
+                    _rys = [v[1] for v in _m.vertices]
+                    if _rxs:
+                        _rbb[_p.semantic_role.value] = (min(_rxs), min(_rys), max(_rxs), max(_rys))
+            rigid = rigidity_field(rest, regions_from(_rbb))
             gkfs = []
             for _idx in range(_tot):
                 _rem = _idx
@@ -505,8 +517,8 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 cyaw, cpit = math.cos(yaw), math.cos(pitch)             # pseudo-3D squash factors
                 syaw, spit = math.sin(yaw), math.sin(pitch)
                 cr, sr = math.cos(roll), math.sin(roll)
-                grid = []
-                for (px_, py_) in rest:
+
+                def _squash(px_, py_):
                     # A point at depth z rotating about the head axis moves x' = x·cos(a) + z·sin(a).
                     # We had the cos term and not the sin one, which is a pure horizontal SCALE — so the
                     # two eyes drifted APART toward the centre line instead of sweeping together, and a
@@ -522,8 +534,20 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                     else:
                         _r2 = _srad * _srad - (px_ - _sx) ** 2 - (py_ - _sy) ** 2
                         z = math.sqrt(_r2) if _r2 > 0.0 else 0.0        # 0 outside the ball (hair, edges)
-                    tx = _sx + (px_ - _sx) * cyaw + z * syaw
-                    ty = _sy + (py_ - _sy) * cpit + z * spit
+                    return (_sx + (px_ - _sx) * cyaw + z * syaw,
+                            _sy + (py_ - _sy) * cpit + z * spit)
+
+                grid = []
+                for (px_, py_), (w, ccx, ccy) in zip(rest, rigid):
+                    tx, ty = _squash(px_, py_)
+                    if w > 0.0:
+                        # Rigid target: translate the point by the feature centroid's OWN squash
+                        # displacement, so the whole feature shifts as one and never narrows (T5). Blend
+                        # by w — eyes 1.0 (fully rigid), nose/mouth 0.30. Roll below is exempt (a rotation
+                        # preserves shape). At yaw=pitch=0 the squash is identity, so rest is untouched.
+                        rtx, rty = _squash(ccx, ccy)
+                        tx = tx * (1.0 - w) + (px_ + (rtx - ccx)) * w
+                        ty = ty * (1.0 - w) + (py_ + (rty - ccy)) * w
                     dx = tx - _pivot[0]
                     dy = ty - _pivot[1]
                     rx = _pivot[0] + dx * cr - dy * sr

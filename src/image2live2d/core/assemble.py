@@ -43,14 +43,17 @@ def textures_for(stack: LayerStack) -> list[Texture]:
     ]
 
 
-def parts_for(stack: LayerStack) -> list[Part]:
-    """One ``Part`` per layer, carrying its semantic role and draw order."""
+def parts_for(stack: LayerStack, part_deformers: dict[str, str] | None = None) -> list[Part]:
+    """One ``Part`` per layer, carrying its semantic role, draw order, and (when authoring parented it to
+    a deformer, e.g. the head-turn warp) its ``parent_deformer``."""
+    part_deformers = part_deformers or {}
     return [
         Part(
             id=layer.id,
             semantic_role=layer.semantic_role,
             texture_id=texture_id_for(layer.id),
             draw_order=layer.draw_order,
+            parent_deformer=part_deformers.get(layer.id),
         )
         for layer in stack.layers
     ]
@@ -67,12 +70,13 @@ def assemble_rig(
     physics: list[PhysicsRig],
     archetype: str | None = None,
     animations: list[Animation] | None = None,
+    part_deformers: dict[str, str] | None = None,
 ) -> Rig:
     """Assemble and validate the complete ``Rig`` (IRR)."""
     return Rig(
         meta=Meta(name=name, source_image=source, archetype=archetype),
         textures=textures_for(stack),
-        parts=parts_for(stack),
+        parts=parts_for(stack, part_deformers),
         meshes=meshes,
         deformers=deformers,
         parameters=parameters,

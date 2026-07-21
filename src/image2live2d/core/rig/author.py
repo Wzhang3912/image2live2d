@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import math
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from ..landmark import Landmarks
 from ..structure.graph import (
@@ -47,7 +47,7 @@ from ..structure.skirt import skirt_cloth, skirt_zones
 from ..structure.strands import hair_strands
 from ..types import LayerStack
 from ...irr.params import make_parameter
-from ...irr.schema import Deformer, Keyform, Mesh, Parameter, SemanticRole, Vec2
+from ...irr.schema import Deformer, DeformerType, Keyform, Mesh, Parameter, SemanticRole, Vec2
 
 # --------------------------------------------------------------------------------------------------
 # Template selection
@@ -103,6 +103,14 @@ _ANGLE_Z_DEG = 12.0   # head tilt degrees at its extreme
 _BODY_TURN_X = math.radians(8.0)  # body sway at its extreme (range +-10)
 _BODY_TURN_Y = math.radians(6.0)
 _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
+# Head turn/tilt at the extreme, for the .cmo3 warp deformer only (moc3/nijilive synthesise their own).
+# Magnitudes match the moc3 head-warp squash (HEAD_YAW/PITCH/ROLL) so the editable project turns like
+# the runtime files.
+_HEAD_TURN_X = 0.52   # yaw radians (horizontal squash) at full ParamAngleX
+_HEAD_TURN_Y = 0.42   # pitch radians (vertical squash) at full ParamAngleY
+_HEAD_Z_DEG = 20.0    # head roll degrees at full ParamAngleZ
+_HEAD_WARP_ID = "deform_head_turn"
+_HEAD_GRID = 4        # NxN control lattice over the head bbox (N-1 x N-1 warp segments)
 _SWAY_TAPER = 2.0     # how the swing grows from root to tip, as depth**_SWAY_TAPER. Hair is a
 #                       cantilever: it is *stiff where it is attached* and free at the ends, and a beam
 #                       clamped at one end deflects quadratically along its length. The taper used to be
@@ -171,10 +179,12 @@ _LIMB_BEND_BAND = 0.35  # fraction of the lower segment over which the bend ramp
 
 @dataclass
 class RigAuthoring:
-    """Output of the authoring stage: deformers and populated parameters for the IRR."""
+    """Output of the authoring stage: deformers, populated parameters, and the part->deformer parenting
+    (``part_deformers[part_id] = deformer_id``) for the IRR."""
 
     deformers: list[Deformer]
     parameters: list[Parameter]
+    part_deformers: dict[str, str] = field(default_factory=dict)
 
 
 def author_rig(
@@ -245,15 +255,22 @@ def author_rig(
     body_acc = [(pid, m) for pid, m in accessories if graph.parent_of(pid) == BODY]
 
     # --- Head turn & tilt (ParamAngleX/Y/Z) -----------------------------------------------------
-    # Emitted as keyform scaffolds only. Each backend synthesises the head turn from the group it owns
-    # (the Live2D emitter warps the head group about its own computed neck-base pivot; nijilive rotates
-    # the head group node) and discards any baked head offsets — so there is nothing to size a sphere
-    # for here. See _head_turn_scaffold. Body turn below is different and DOES bake offsets.
+    # Represented as a WARP DEFORMER over the head group, driven by ParamAngle*. The two runtime
+    # backends (moc3 warp about the neck base, nijilive head-node rotation) synthesise their own head
+    # turn and read neither Rig.deformers nor deformer_offsets, so this is invisible to them — the
+    # ParamAngle* mesh_offsets stay empty and the .moc3/.inp are byte-identical. The editable-project
+    # (.cmo3) backend, which has no synthesiser of its own, consumes this deformer. See _head_turn_warp.
+    deformers: list[Deformer] = []
+    part_deformers: dict[str, str] = {}
     head = members(*_HEAD_ROLES) + head_acc
     if head:
-        params.append(_head_turn_scaffold("ParamAngleX"))
-        params.append(_head_turn_scaffold("ParamAngleY"))
-        params.append(_head_turn_scaffold("ParamAngleZ"))
+        warp, turn_params = _head_turn_warp(
+            [m for _, m in head], _union_center([m for _, m in head]),
+            _union_bbox([m for _, m in head]))
+        deformers.append(warp)
+        params.extend(turn_params)
+        for pid, _ in head:
+            part_deformers[pid] = warp.id
 
     # --- Pupil look -----------------------------------------------------------------------------
     # Landmark-corrected: bound travel by the real eye size so pupils stay within the eye.
@@ -375,7 +392,7 @@ def author_rig(
         params.append(_breath("ParamBreath", all_parts))
 
     _cap_offsets(params, _DEFORM_CAP)  # final safety net against magnitude runaways (any param/part)
-    return RigAuthoring(deformers=[], parameters=params)
+    return RigAuthoring(deformers=deformers, parameters=params, part_deformers=part_deformers)
 
 
 def _cap_offsets(params: list[Parameter], cap: float) -> None:
@@ -426,25 +443,73 @@ def _tri(param_id: str, at) -> Parameter:
     return p
 
 
-def _head_turn_scaffold(param_id: str) -> Parameter:
-    """The HEAD turn/tilt (ParamAngleX/Y/Z) as a keyform SCAFFOLD — key values only, no baked per-vertex
-    offsets.
-
-    Both shipping backends synthesise the head turn themselves and **discard** any baked head offsets:
-    the Live2D emitter drives a warp-deformer grid over the head group (``moc3_emit`` ``turn_ids``,
-    which strips ParamAngle* from the head meshes' bindings), and nijilive rotates the head GROUP NODE
-    (``puppet`` ``_HEAD_ROT``, which excludes the head parts from deform bindings). So the old sphere
-    warp we baked here (``_head_turn``/``_rotation``) was **dead code for head parts** — offsets nothing
-    read, inviting someone to tune a function that can't move the output. (Verified: emitting with vs
-    without these offsets yields byte-identical .moc3 and .inp.)
-
-    Body turn is deliberately NOT scaffolded: the Live2D emitter does not warp the body, so the .moc3's
-    body sway/lean still consumes the baked ParamBodyAngle* offsets — those stay on ``_head_turn`` /
-    ``_rotation``.
-    """
+def _tri_deformer(param_id: str, deformer_id: str, at) -> Parameter:
+    """Like :func:`_tri`, but the 3 keyforms carry ``deformer_offsets`` (per grid-vertex deltas for
+    ``deformer_id``) instead of per-mesh offsets — for a parameter that drives a warp deformer."""
     p = make_parameter(param_id)
-    p.keyforms = [Keyform(value=p.min), Keyform(value=p.default), Keyform(value=p.max)]
+    p.keyforms = [
+        Keyform(value=p.min, deformer_offsets={deformer_id: at(-1.0)}),
+        Keyform(value=p.default, deformer_offsets={deformer_id: at(0.0)}),
+        Keyform(value=p.max, deformer_offsets={deformer_id: at(1.0)}),
+    ]
     return p
+
+
+def _cap_cell(cell: list[Vec2]) -> list[Vec2]:
+    """Uniform-scale a set of grid-vertex deltas so the largest is <= ``_TURN_CAP`` (preserves shape)."""
+    mx = max((math.hypot(dx, dy) for dx, dy in cell), default=0.0)
+    if mx > _TURN_CAP:
+        s = _TURN_CAP / mx
+        return [(dx * s, dy * s) for dx, dy in cell]
+    return cell
+
+
+def _head_turn_warp(
+    head_meshes: list[Mesh], center: Vec2, bbox: tuple[float, float, float, float],
+) -> tuple[Deformer, list[Parameter]]:
+    """A head-turn WARP deformer for the .cmo3 backend: an ``N x N`` control lattice over the head bbox
+    whose points move per ParamAngleX/Y/Z. Yaw/pitch are the same pivot-anchored pseudo-3D sphere squash
+    as :func:`_head_turn` (features foreshorten around a fixed centre); roll is an in-plane rotation. The
+    two runtime backends read neither this deformer nor its ``deformer_offsets``, so nothing changes for
+    them (see the head-turn note in :func:`author_rig`).
+    """
+    cx, cy = center
+    x0, y0, x1, y1 = bbox
+    n = _HEAD_GRID
+    lattice: list[Vec2] = [
+        (x0 + (x1 - x0) * c / (n - 1), y0 + (y1 - y0) * r / (n - 1))
+        for r in range(n) for c in range(n)
+    ]
+    rx = max(cx - x0, x1 - cx, 1e-6)
+    ry = max(cy - y0, y1 - cy, 1e-6)
+
+    def squash(a: float, axis: str) -> list[Vec2]:
+        shift = (rx if axis == "x" else ry) * math.sin(a)   # anchor the pivot (see _head_turn)
+        cell: list[Vec2] = []
+        for x, y in lattice:
+            if axis == "x":
+                phi = math.asin(_clamp((x - cx) / rx, -1.0, 1.0))
+                cell.append((cx + rx * math.sin(phi + a) - x - shift, 0.0))
+            else:
+                psi = math.asin(_clamp((y - cy) / ry, -1.0, 1.0))
+                cell.append((0.0, cy + ry * math.sin(psi + a) - y - shift))
+        return _cap_cell(cell)
+
+    def roll(frac: float) -> list[Vec2]:
+        ang = math.radians(_HEAD_Z_DEG) * frac
+        ca, sa = math.cos(ang), math.sin(ang)
+        cell = [(cx + (x - cx) * ca - (y - cy) * sa - x, cy + (x - cx) * sa + (y - cy) * ca - y)
+                for x, y in lattice]
+        return _cap_cell(cell)
+
+    warp = Deformer(id=_HEAD_WARP_ID, type=DeformerType.warp, parent=None,
+                    grid_rows=n, grid_cols=n, grid_vertices=lattice)
+    params = [
+        _tri_deformer("ParamAngleX", _HEAD_WARP_ID, lambda s: squash(s * _HEAD_TURN_X, "x")),
+        _tri_deformer("ParamAngleY", _HEAD_WARP_ID, lambda s: squash(s * _HEAD_TURN_Y, "y")),
+        _tri_deformer("ParamAngleZ", _HEAD_WARP_ID, roll),
+    ]
+    return warp, params
 
 
 def _blink(param_id: str, group: list[tuple[str, Mesh]],

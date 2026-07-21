@@ -414,6 +414,7 @@ def _run_pipeline(job: _Job, data: bytes, filename: str) -> None:
             name=job.name, source=None, stack=ctx["stack"], meshes=ctx["meshes"],
             deformers=ctx["auth"].deformers, parameters=ctx["auth"].parameters,
             physics=ctx["physics"], animations=ctx["anims"],
+            part_deformers=ctx["auth"].part_deformers,
         )
         ctx["rig"] = rig
         out = work / "out"

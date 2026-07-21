@@ -14,6 +14,8 @@ from .caff import (
     pack_caff,
     unpack_caff,
 )
+from .export import rig_to_cmo3
+from .model_xml import build_main_xml
 
 __all__ = [
     "CaffEntry",
@@ -22,4 +24,6 @@ __all__ = [
     "COMPRESS_RAW",
     "COMPRESS_FAST",
     "COMPRESS_SMALL",
+    "build_main_xml",
+    "rig_to_cmo3",
 ]

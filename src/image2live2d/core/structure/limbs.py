@@ -44,8 +44,10 @@ _PAIR_LEVEL_TOL = 0.10       # their centroids must sit within this much of the 
 # Facial twins are level by anatomy, so the tolerance above is right for them. LIMBS are not: a pose
 # raises one arm and leaves the other down, and the pair is still a pair. An absolute tolerance cannot
 # express that (it means different things on a chibi and on an adult), so limbs get one measured
-# against the lobes' OWN length: the mopping character's arms are 0.302 and 0.200 tall with centroids
+# against the lobes' OWN length: the mopping character's arms are 0.302 and 0.192 tall with centroids
 # 0.139 apart, i.e. 0.55 of their mean length. Under the strict 0.10 they were not a pair at all.
+# Swept on 13 characters: 0.40 and 0.50 miss the arms, 0.60 through 1.20 all give the identical result,
+# so this sits in the middle of a plateau rather than on a threshold fitted to one character.
 _PAIR_POSE_LEVEL_FRAC = 0.75  # ...as a fraction of the mean lobe height
 
 # Roles the decomposer uses as a junk drawer — the ones worth re-reading from geometry.
@@ -75,7 +77,7 @@ _ARM_MIN_HEIGHT_FRAC = 0.12  # each arm spans at least this fraction of the char
 _ARM_MIN_LEVEL_FRAC = 0.35   # ...and hangs no lower than this fraction of the way down from the head
 # How much of a lobe must lie beside the head before "inside the head's column" condemns it as
 # jewellery. Measured: an earring overlaps the head over 1.00 of its own height, a raised forearm 0.00.
-# Nothing in between on 14 characters, so any value in (0, 1) reads the same.
+# Nothing in between on 13 characters, and swept from 0.05 to 0.90 the result never changes.
 _EARRING_HEAD_OVERLAP = 0.25
 
 # --- fused legs ------------------------------------------------------------------------------------

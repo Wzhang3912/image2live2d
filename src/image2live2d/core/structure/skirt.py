@@ -45,8 +45,13 @@ _MIN_ZONES = 1          # floor: a very narrow hem is one central sway, not thre
 
 # Edge vs interior base tuning + drivers (were the per-zone _SKIRT_ZONES constants). Edge zones couple
 # to the near leg; interior zones carry more fabric (heavier, longer) and couple to body lean/twist.
-_EDGE_BASE = (1.5, 0.28, 1.3)
-_INTERIOR_BASE = (1.8, 0.25, 1.5)
+# Mass/drag re-tuned against Hiyori's cloth row (RIVAL_HARVEST_BACKLOG T7): our skirt was the ONE thing we
+# emitted that fell OUTSIDE the real-artist regime — raw mobility (1-drag) came out 0.61-0.65 against a
+# real floor of ~0.71, so physics3.py had to clamp it, i.e. we were emitting cloth more heavily damped
+# than any rig on hand. Hiyori's skirt is mobility 0.9 / delay 0.6; these bases land ~0.86 / ~0.67 after
+# the geometry scaling below, in-regime and unclamped even for a short hem (the case that used to clamp).
+_EDGE_BASE = (0.9, 0.10, 1.3)
+_INTERIOR_BASE = (1.1, 0.09, 1.5)
 _EDGE_DRIVERS_L = ["ParamLegLA", "ParamBodyAngleZ"]
 _EDGE_DRIVERS_R = ["ParamLegRA", "ParamBodyAngleZ"]
 _INTERIOR_DRIVERS = ["ParamBodyAngleZ", "ParamBodyAngleY"]

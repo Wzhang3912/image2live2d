@@ -19,14 +19,30 @@ PHYSICS_VERSION = 3
 _INPUT_WEIGHT = 60.0       # Cubism input weight (how strongly the driver swings the pendulum)
 _OUTPUT_WEIGHT = 100.0     # Cubism output weight
 _LENGTH_UNITS = 12.0       # IRR pendulum length (~1) -> Cubism position units
-_NORM = {                  # standard Cubism normalization ranges
+_NORM = {                  # standard Cubism normalization ranges (matches Hiyori's +-10)
     "Position": {"Minimum": -10.0, "Default": 0.0, "Maximum": 10.0},
     "Angle": {"Minimum": -10.0, "Default": 0.0, "Maximum": 10.0},
 }
+# Per-role hair output scale, read off Hiyori's own physics table (RIVAL_HARVEST_BACKLOG T7). A real rig
+# does NOT drive every hair group equally: the fringe is short and restrained (1.522) while the long back
+# hair sweeps much further (2.061). We used a flat 1.4 for all hair, which both under-drove the back hair
+# and flattened the front/back contrast that makes hair read as layered. Cloth stays at unity.
+_HAIR_OUTPUT_SCALE = (("Front", 1.52), ("Side", 1.80), ("Back", 2.06))
+_CLOTH_OUTPUT_SCALE = 1.0
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
     return lo if v < lo else hi if v > hi else v
+
+
+def _output_scale(param_id: str) -> float:
+    """Hiyori-calibrated output scale for a physics output parameter. Hair groups scale per role (the
+    ``V`` bounce and numbered ``Side2`` variants ride their base role); everything else stays at unity."""
+    if param_id.startswith("ParamHair"):
+        for role, scale in _HAIR_OUTPUT_SCALE:
+            if role in param_id:
+                return scale
+    return _CLOTH_OUTPUT_SCALE
 
 
 def _vertices(mass: float, drag: float, length: float) -> list[dict]:
@@ -114,8 +130,9 @@ def physics3(rig: Rig) -> dict:
                 # VertexIndex >= len(Vertices) (Hiyori taps 1..7 of an 11-particle chain).
                 "VertexIndex": len(verts) - 1,
                 # Hair gets a higher output scale so the physics swing reaches a visibly larger sway (more
-                # "alive"); cloth/skirt stays at unity to avoid over-driving the fabric.
-                "Scale": 1.4 if ph.output_param.startswith("ParamHair") else 1.0,
+                # "alive"), per role off Hiyori's table; cloth/skirt stays at unity to avoid over-driving
+                # the fabric. See _output_scale / _HAIR_OUTPUT_SCALE.
+                "Scale": _output_scale(ph.output_param),
                 "Weight": _OUTPUT_WEIGHT,
                 "Type": "Angle",
                 "Reflect": False,

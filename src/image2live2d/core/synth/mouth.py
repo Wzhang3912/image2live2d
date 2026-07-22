@@ -67,8 +67,18 @@ _SUPERSAMPLE = 4
 # **interior cavity** — pixels much darker than the character's skin, a real oral shadow, not a light
 # lip. So a mouth is "already open" only when it is BOTH tall AND has that dark interior: a closed smile
 # (light interior, darkfrac ~0) gets its cavity; a true open mouth (dark cavity + teeth) is left alone.
+# The threshold below started at 0.15, which a *dark-lipped closed mouth* trips: a lip drawn as a bold
+# dark stroke over a lighter lower lip (the three hand-drawn Wikipe-tan characters) puts 0.17-0.25 of
+# the box's solid pixels below the skin-relative cut, all of it the lip line, none of it an opening. So
+# all three were judged "already open" and denied a cavity — their mouths could never open, and worse
+# the capability report blamed "no interior behind the lips" when the truth was the opposite. Measured
+# across all 13 corpus characters, every *closed* mouth caps at 0.245 (the dark-lipped ones) or sits at
+# <=0.05 (the pale ones); a genuinely agape mouth is dominated by its interior shadow, well above that.
+# 0.35 sits in that gap. It is also the safe side of an asymmetric cost: a *missing* cavity kills the
+# open/close capability outright, while a cavity painted behind a mouth that really is agape is mostly
+# occluded by the opaque open-mouth sprite — so when unsure, paint.
 _CLOSED_MAX_ASPECT = 0.40     # height/width below this the box is a stroke — always a closed mouth
-_DARK_INTERIOR_FRAC = 0.15    # a tall box is "open" only if at least this fraction of its solid pixels
+_DARK_INTERIOR_FRAC = 0.35    # a tall box is "open" only if at least this fraction of its solid pixels
 _DARK_REL_SKIN = 0.60         # are darker than _DARK_REL_SKIN x the skin luminance (a real cavity)
 
 

@@ -215,9 +215,10 @@
       "head_turn",
       "leg_left",
       "leg_right",
-      "mouth_form"
+      "mouth_form",
+      "mouth_open"
     ],
-    "min_parts": 24,
+    "min_parts": 25,
     "min_physics_chains": 9,
     "plausibility": []
   },
@@ -233,9 +234,10 @@
       "expressions",
       "gaze",
       "head_turn",
-      "mouth_form"
+      "mouth_form",
+      "mouth_open"
     ],
-    "min_parts": 25,
+    "min_parts": 26,
     "min_physics_chains": 9,
     "plausibility": []
   },
@@ -251,9 +253,10 @@
       "expressions",
       "gaze",
       "head_turn",
-      "mouth_form"
+      "mouth_form",
+      "mouth_open"
     ],
-    "min_parts": 24,
+    "min_parts": 25,
     "min_physics_chains": 7,
     "plausibility": [
       "face_base_incomplete"

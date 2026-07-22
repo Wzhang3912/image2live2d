@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
+from .denoise import drop_specks
 from ..types import Layer, LayerStack, PreparedImage
 from ...irr.schema import SemanticRole
 
@@ -226,7 +227,11 @@ def raws_to_stack(
         # "eyebrow" layer covering both eyes). If the layer maps to a default-left facial role and the
         # name carries no side, split its two horizontal blobs into proper _l / _r parts so both-side
         # rigging (blink/eyeball/brow L+R) is authored.
-        full = _clean_alpha(full)
+        # Clip the faint halo, then drop the opaque scatter blobs. Order matters, and so does doing
+        # both BEFORE the splits below: those read the layer's alpha *structure* (exactly two blobs),
+        # so a single stray speck column makes a two-eyed layer look three-blobbed and the split is
+        # refused — the character then ships with one eye. See denoise.drop_specks.
+        full = drop_specks(_clean_alpha(full))
         outputs = [(role, full)]
         if role in _SIDE_FLIP and not _has_side_token(raw.name):
             split = _split_lr(full)

@@ -27,6 +27,10 @@ venv/
 models/
 checkpoints/
 data/
+# ...except the test expectation tables, which are code. They describe the character corpus without
+# containing any of it — the images themselves stay out of the repo (see tests/test_character_corpus.py).
+!tests/data/
+!tests/data/*.json
 
 # Images / character art / other binary data (keep the repo code-only)
 *.png

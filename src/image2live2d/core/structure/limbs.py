@@ -145,6 +145,14 @@ def _looks_like_arms(
             return False                              # too small to be a limb
         if y1 < floor_y:
             return False                              # hangs too low — that's a leg or a shoe
+        # An arm attaches AT the shoulder, so it cannot start above one. This rule had a floor but no
+        # ceiling, and a wide-brimmed hat clears every other test — its two lobes are a mirrored pair,
+        # they sit outside the head's narrow column, they are tall enough, and they are nowhere near the
+        # waist. So `blondedrills`' headwear was split into arm_l/arm_r up at the top of the canvas
+        # (y 0.84-0.99), and the real arms then had to share a shoulder pivot with a hat. The sibling
+        # rule `_leg_looks_like_arm` already tests exactly this; both now use the same shoulder line.
+        if y1 > hy0 + _ARM_SHOULDER_MARGIN * height:
+            return False                              # rises above the shoulder — headwear, not arms
     return True
 
 

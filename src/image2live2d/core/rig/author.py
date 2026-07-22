@@ -1019,19 +1019,45 @@ def _union_center(meshes: list[Mesh]) -> Vec2:
     return ((x0 + x1) / 2.0, (y0 + y1) / 2.0)
 
 
-def _limb_joints(meshes: list[Mesh]) -> tuple[Vec2, Vec2, Vec2]:
-    """``(shoulder/hip, elbow/knee, wrist/ankle)`` down the limb's own vertical axis.
+# How much of the limb's height is sampled around a joint to locate the limb's axis there. The result
+# is insensitive to this: every band from 0.00 (the single top row) to 0.30 puts all 34 measured
+# shoulders inside their limb. 0.10 is picked for robustness at both ends — an exact top row rides on
+# whichever stray vertex happens to be highest, and a wide band drags the shoulder down toward the elbow.
+_JOINT_BAND = 0.10
 
-    A hanging arm or leg attaches at the top of its silhouette and dangles down, so the swing pivot is
-    the top-centre, the end is the bottom-centre, and the bend joint sits halfway between. Taking the
-    centre from the limb's *mesh* (which holds only this side's triangles after the de-cardboard split)
-    is what keeps the left arm pivoting on its own shoulder instead of the body midline — the landmark
-    silhouette can't, because the split halves share one two-armed texture.
+
+def _limb_joints(meshes: list[Mesh]) -> tuple[Vec2, Vec2, Vec2]:
+    """``(shoulder/hip, elbow/knee, wrist/ankle)`` down the limb's own **silhouette axis**.
+
+    A hanging arm or leg attaches at the top of its silhouette and dangles down, so the joints sit at
+    the top, middle and bottom of it. Taking them from the limb's *mesh* (which holds only this side's
+    triangles after the de-cardboard split) is what keeps the left arm pivoting on its own shoulder
+    instead of the body midline — the landmark silhouette can't, because the split halves share one
+    two-armed texture.
+
+    Their **x** used to be the limb's bbox centre, and that is wrong for any limb that is not a vertical
+    bar. An arm attaches at the shoulder and hangs down and *outward*, so the bbox centre is somewhere
+    out in the middle of the arc — measured on the 8 real characters, **16 of 34 limb pivots landed
+    outside the limb they rotate**, including both arms on 7 of 8. A rotation about a point in empty
+    space swings the limb wide instead of turning it in place, which is the same family as the
+    shoe-and-leg disconnect the render oracle caught earlier.
+
+    So each joint takes the centroid of the limb's own cross-section at that height (a band of
+    ``_JOINT_BAND`` of the limb's height) — the silhouette's medial axis, sampled where the joint
+    actually is. That puts every shoulder/hip inside its limb (16 outside -> 0) and most wrists/ankles
+    too (16 -> 4); the elbow/knee was already inside, since a limb's middle is near its bbox centre.
     """
+    verts = [v for m in meshes for v in m.vertices]
     x0, y0, x1, y1 = _union_bbox(meshes)
-    cx = (x0 + x1) / 2.0
     top, bot = y1, y0                                   # y-up: shoulder/hip at the top, wrist/ankle low
-    return (cx, top), (cx, (top + bot) / 2.0), (cx, bot)
+    height = max(top - bot, 1e-9)
+
+    def axis_x(y: float) -> float:
+        band = [x for x, vy in verts if abs(vy - y) <= _JOINT_BAND * height]
+        return sum(band) / len(band) if band else (x0 + x1) / 2.0
+
+    mid = (top + bot) / 2.0
+    return (axis_x(top), top), (axis_x(mid), mid), (axis_x(bot), bot)
 
 
 # A rider (shoe/cuff) attaches at the limb's distal END: its top sits in a band around the limb's

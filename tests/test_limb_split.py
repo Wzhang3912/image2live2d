@@ -110,6 +110,25 @@ def test_earrings_are_not_mistaken_for_arms():
     assert all(r is not R.arm_l and r is not R.arm_r for r in _roles(stack).values())
 
 
+def test_headwear_is_not_mistaken_for_arms():
+    """Regression (backlog T10): a wide-brimmed hat clears every other arm test — its two lobes are a
+    mirrored pair, they sit outside the head's narrow column, they are tall enough, and they are nowhere
+    near the waist. The rule had a floor but no ceiling, so `blondedrills`' headwear was split into
+    arm_l/arm_r up at the top of the canvas (y 0.84-0.99) and the real arms then had to share a shoulder
+    pivot with a hat, dragging it 0.2 body-heights above where a shoulder is. An arm attaches AT the
+    shoulder, so it cannot start above one."""
+    stack, meshes = _scene([
+        ("face", R.face_base, [(0.44, 0.81, 0.54, 0.93)]),
+        ("neck", R.neck, [(0.47, 0.79, 0.51, 0.85)]),
+        ("torso", R.clothing, [(0.43, 0.64, 0.55, 0.81)]),
+        ("legs", R.clothing, [(0.41, 0.13, 0.58, 0.54)]),
+        # the brim: a mirrored pair, outside the head's column, tall, and well above the waist
+        ("hat", R.accessory, [(0.30, 0.84, 0.44, 0.99), (0.54, 0.84, 0.68, 0.99)]),
+    ])
+    split_bundled_pairs(stack, meshes)
+    assert all(r is not R.arm_l and r is not R.arm_r for r in _roles(stack).values())
+
+
 def test_shoes_are_not_mistaken_for_arms():
     """A mirrored pair down at the feet is footwear. Arms hang from the shoulders."""
     stack, meshes = _scene([

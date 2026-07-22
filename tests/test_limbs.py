@@ -268,3 +268,47 @@ def test_limbs_authored_from_mesh_without_landmark_joints():
         auth = author_rig(stack, meshes, select_template(stack), landmarks=lm)
         ids = {p.id for p in auth.parameters}
         assert {"ParamArmLA", "ParamArmLB", "ParamLegLA", "ParamLegRA"} <= ids
+
+
+# --------------------------------------------------------------------------------------------------
+# Limb joints sit on the limb's silhouette axis, not its bbox centre (backlog T10)
+# --------------------------------------------------------------------------------------------------
+def _angled_arm_mesh():
+    """An arm that attaches at a shoulder and hangs down and OUTWARD — the shape of a real arm, and the
+    one the bbox centre gets wrong. Two stacked blocks: an upper arm at the shoulder, a forearm swung
+    out to the side. The bbox spans both, so its x-centre lands in the notch between them."""
+    from image2live2d.irr.schema import Mesh
+
+    verts, uvs, tris = [], [], []
+    for x0, y0, x1, y1 in ((0.40, 0.60, 0.48, 0.80),      # upper arm, at the shoulder
+                           (0.48, 0.40, 0.72, 0.60)):     # forearm, swung out to the side
+        b = len(verts)
+        verts += [(x0, y0), (x1, y0), (x1, y1), (x0, y1)]
+        uvs += [(0.0, 0.0)] * 4
+        tris += [(b, b + 1, b + 2), (b, b + 2, b + 3)]
+    return Mesh(part_id="arm_l", vertices=verts, uvs=uvs, triangles=tris)
+
+
+def test_the_shoulder_sits_on_the_limbs_own_axis_not_its_bbox_centre():
+    """Measured on the 8 real characters: with the bbox centre, 16 of 34 limb pivots landed OUTSIDE the
+    limb they rotate (both arms on 7 of 8). A rotation about a point in empty space swings the limb wide
+    instead of turning it in place. The cross-section centroid puts all 34 inside."""
+    from image2live2d.core.rig.author import _limb_joints
+
+    mesh = _angled_arm_mesh()
+    shoulder, _, _ = _limb_joints([mesh])
+    assert shoulder[1] == pytest.approx(0.80)                 # at the top of the limb
+    assert 0.40 <= shoulder[0] <= 0.48, "shoulder must land on the upper arm, not out in the notch"
+    bbox_centre_x = (0.40 + 0.72) / 2.0                       # 0.56 — inside neither block at that height
+    assert not (0.40 <= bbox_centre_x <= 0.48), "the old pivot really did miss the limb"
+
+
+def test_every_joint_follows_the_limb_where_it_bends():
+    """The wrist/ankle anchors the parts that ride the limb's end (a shoe, a cuff), so it has to follow
+    the limb out to where it actually ends rather than staying on the bbox's midline."""
+    from image2live2d.core.rig.author import _limb_joints
+
+    _, elbow, wrist = _limb_joints([_angled_arm_mesh()])
+    assert wrist[1] == pytest.approx(0.40)                    # the bottom of the limb
+    assert 0.48 <= wrist[0] <= 0.72, "wrist must sit on the forearm it ends in"
+    assert elbow[1] == pytest.approx(0.60)                    # halfway down

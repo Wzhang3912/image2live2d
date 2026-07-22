@@ -194,6 +194,76 @@ _FACE_PAIRS = (
 )
 
 
+# Mouth-region envelope, measured on the 8 real decomposed characters (model space, face_base bbox as
+# the reference frame). The spread is remarkably tight — width 0.133-0.237 of the face, centre 0.808-
+# 0.881 of the way down it, and horizontally centred to within 0.9% of face width on every one — so
+# these bounds are set several times wider than the observed spread. They are here to catch a mouth
+# region that is *grossly* wrong (on the forehead, spanning the whole face, off to one side), not to
+# police style; a stylised character must never trip them.
+#
+# This exists because we could not otherwise tell. `synth.mouth` sizes the whole cavity from the mouth
+# layer's WIDTH, so a bad mouth region silently produces a bad cavity, and nothing downstream complains
+# — the same shape of silent-but-wrong that hid the head-turn squash and the clamped skirt. It is also
+# the trigger for backlog T9 (SAM-mouth-from-source): the rival's premise is that See-through's mouth
+# region is unreliable, and after the T8 denoise we could not reproduce that on any character. If a real
+# character trips this check, that premise is back and the heavy SAM path is justified; until one does,
+# it is not.
+_MOUTH_MIN_WIDTH_FRAC = 0.05   # narrower than this and it is a speck, not a mouth (measured >= 0.133)
+_MOUTH_MAX_WIDTH_FRAC = 0.50   # wider and the region has swallowed the jaw     (measured <= 0.237)
+_MOUTH_MIN_DEPTH_FRAC = 0.50   # above mid-face is the nose/eyes, not a mouth   (measured >= 0.808)
+_MOUTH_MAX_DEPTH_FRAC = 1.10   # below this it has fallen off the chin          (measured <= 0.881)
+_MOUTH_MAX_OFFSET_FRAC = 0.20  # off-centre by more than this is a mis-region   (measured <= 0.009)
+
+
+def _role_bbox(rig: Rig, role: SemanticRole) -> tuple[float, float, float, float] | None:
+    """Model-space ``(x0, y0, x1, y1)`` over every mesh of every part carrying ``role`` (y up)."""
+    ids = {p.id for p in rig.parts if p.semantic_role is role}
+    verts = [v for m in rig.meshes if m.part_id in ids for v in m.vertices]
+    if not verts:
+        return None
+    xs = [x for x, _ in verts]
+    ys = [y for _, y in verts]
+    return min(xs), min(ys), max(xs), max(ys)
+
+
+def mouth_region_issues(rig: Rig) -> list[Issue]:
+    """Flag a mouth whose region is implausible relative to the face (see the envelope above).
+
+    Silent when either the mouth or the face is absent — ``no_face`` already covers a faceless rig, and
+    a character with no mouth layer has no mouth region to judge.
+    """
+    mouth = _role_bbox(rig, SemanticRole.mouth)
+    face = _role_bbox(rig, SemanticRole.face_base)
+    if mouth is None or face is None:
+        return []
+    fw = face[2] - face[0]
+    fh = face[3] - face[1]
+    if fw <= 0.0 or fh <= 0.0:
+        return []
+
+    width = (mouth[2] - mouth[0]) / fw
+    depth = (face[3] - (mouth[1] + mouth[3]) / 2.0) / fh      # y up -> distance below the face's top
+    offset = ((mouth[0] + mouth[2]) / 2.0 - (face[0] + face[2]) / 2.0) / fw
+
+    issues: list[Issue] = []
+    if not _MOUTH_MIN_WIDTH_FRAC <= width <= _MOUTH_MAX_WIDTH_FRAC:
+        issues.append(Issue(Severity.warning, "implausible_mouth_width",
+                            f"the mouth spans {width:.2f} of the face's width (expected "
+                            f"{_MOUTH_MIN_WIDTH_FRAC}-{_MOUTH_MAX_WIDTH_FRAC}) — the decomposed mouth "
+                            "region looks wrong, and the synthesised cavity is sized from it"))
+    if not _MOUTH_MIN_DEPTH_FRAC <= depth <= _MOUTH_MAX_DEPTH_FRAC:
+        issues.append(Issue(Severity.warning, "misplaced_mouth",
+                            f"the mouth sits {depth:.2f} of the way down the face (expected "
+                            f"{_MOUTH_MIN_DEPTH_FRAC}-{_MOUTH_MAX_DEPTH_FRAC}) — that is not where a "
+                            "mouth goes, so the mouth rig is driving the wrong region"))
+    if abs(offset) > _MOUTH_MAX_OFFSET_FRAC:
+        issues.append(Issue(Severity.warning, "off_centre_mouth",
+                            f"the mouth is {offset:+.2f} of the face's width off its centre line "
+                            f"(expected within {_MOUTH_MAX_OFFSET_FRAC}) — a mis-decomposed region, or "
+                            "a profile view the front-facing mouth rig can't drive"))
+    return issues
+
+
 def plausibility_issues(rig: Rig) -> list[Issue]:
     """Is the input a single front-facing character this pipeline can actually rig?
 
@@ -222,6 +292,7 @@ def plausibility_issues(rig: Rig) -> list[Issue]:
                             f"none on the {empty}) — a profile view or a mis-decomposition, which the "
                             "front-facing rig can't drive on both sides"))
 
+    issues.extend(mouth_region_issues(rig))
     return issues
 
 

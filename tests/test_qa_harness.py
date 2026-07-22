@@ -151,3 +151,57 @@ def test_flagged_input_still_produces_a_rig():
     report = evaluate(rig, "one_sided")
     assert not report.passed
     assert any(r.startswith("input:") for r in report.reasons)
+
+
+# --- mouth-region plausibility (backlog T9 trigger) -----------------------------------------------
+# The envelope is measured on the 8 real decomposed characters: mouth width 0.133-0.237 of the face,
+# centre 0.808-0.881 of the way down it, horizontally centred to within 0.009 of face width. The bounds
+# in `harness` are set several times wider than that spread, so these tests use a REAL mouth as the
+# baseline and then break it grossly — the check must not police style, only catch a wrong region.
+_FACE = ("face_base", R.face_base, (0.2, 0.1, 0.8, 0.9))
+#           face: x 0.2-0.8 (w 0.6), y 0.1-0.9 (h 0.8, y UP so 0.9 is the top of the head)
+_REAL_MOUTH = ("mouth", R.mouth, (0.44, 0.21, 0.56, 0.25))
+#           width 0.12/0.6 = 0.20 of the face; centre y 0.23 -> (0.9-0.23)/0.8 = 0.84 down it; centred
+
+
+def test_a_real_mouth_geometry_is_not_flagged():
+    """The measured average of the 8 characters must sit comfortably inside the envelope."""
+    assert _codes(_build([_FACE, _REAL_MOUTH])) == set()
+
+
+def test_a_mouth_on_the_forehead_is_flagged():
+    high = ("mouth", R.mouth, (0.44, 0.72, 0.56, 0.76))     # up among the eyes, ~0.20 down the face
+    assert "misplaced_mouth" in _codes(_build([_FACE, high]))
+
+
+def test_a_mouth_spanning_the_whole_face_is_flagged():
+    wide = ("mouth", R.mouth, (0.21, 0.21, 0.79, 0.25))     # 0.97 of the face's width
+    assert "implausible_mouth_width" in _codes(_build([_FACE, wide]))
+
+
+def test_a_speck_sized_mouth_region_is_flagged():
+    tiny = ("mouth", R.mouth, (0.49, 0.21, 0.505, 0.25))    # 0.025 of the face's width
+    assert "implausible_mouth_width" in _codes(_build([_FACE, tiny]))
+
+
+def test_a_mouth_off_to_one_side_is_flagged():
+    off = ("mouth", R.mouth, (0.70, 0.21, 0.82, 0.25))      # centre +0.43 of face width off-centre
+    assert "off_centre_mouth" in _codes(_build([_FACE, off]))
+
+
+def test_a_stylised_but_valid_mouth_is_not_flagged():
+    """Guard against the check policing style rather than correctness: a wide grin at nearly twice the
+    widest measured character, and a small mouth at a third of the narrowest, must both pass."""
+    grin = ("mouth", R.mouth, (0.37, 0.21, 0.63, 0.25))     # 0.43 of the face's width
+    small = ("mouth", R.mouth, (0.475, 0.22, 0.525, 0.24))  # 0.08 of the face's width
+    assert _codes(_build([_FACE, grin])) == set()
+    assert _codes(_build([_FACE, small])) == set()
+
+
+def test_the_check_is_silent_without_a_mouth_or_without_a_face():
+    """No mouth layer = no region to judge; no face = `no_face` already covers it. Neither may raise a
+    mouth issue, or every faceless/mouthless rig gets a spurious second warning."""
+    mouth_codes = _codes(_build([_FACE, ("eye_l", R.eye_l, (0.30, 0.55, 0.45, 0.63))]))
+    assert not any("mouth" in c for c in mouth_codes)
+    faceless = _codes(_build([("hair_front", R.hair_front, (0.2, 0.6, 0.8, 0.95)), _REAL_MOUTH]))
+    assert not any("mouth" in c for c in faceless)

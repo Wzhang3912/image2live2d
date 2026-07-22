@@ -41,6 +41,12 @@ from .strands import mesh_components
 # the same height, on opposite sides of the body. A speckle beside a blob is not a pair.
 _PAIR_SIZE_RATIO = 0.45      # the smaller lobe must be at least this fraction of the larger
 _PAIR_LEVEL_TOL = 0.10       # their centroids must sit within this much of the same height (model units)
+# Facial twins are level by anatomy, so the tolerance above is right for them. LIMBS are not: a pose
+# raises one arm and leaves the other down, and the pair is still a pair. An absolute tolerance cannot
+# express that (it means different things on a chibi and on an adult), so limbs get one measured
+# against the lobes' OWN length: the mopping character's arms are 0.302 and 0.200 tall with centroids
+# 0.139 apart, i.e. 0.55 of their mean length. Under the strict 0.10 they were not a pair at all.
+_PAIR_POSE_LEVEL_FRAC = 0.75  # ...as a fraction of the mean lobe height
 
 # Roles the decomposer uses as a junk drawer — the ones worth re-reading from geometry.
 _UNSORTED: frozenset[SemanticRole] = frozenset({
@@ -67,6 +73,10 @@ _TWINS: dict[SemanticRole, tuple[SemanticRole, SemanticRole]] = {
 # strict: mistaking a garment for a limb would give it shoulder and elbow articulation.
 _ARM_MIN_HEIGHT_FRAC = 0.12  # each arm spans at least this fraction of the character's height
 _ARM_MIN_LEVEL_FRAC = 0.35   # ...and hangs no lower than this fraction of the way down from the head
+# How much of a lobe must lie beside the head before "inside the head's column" condemns it as
+# jewellery. Measured: an earring overlaps the head over 1.00 of its own height, a raised forearm 0.00.
+# Nothing in between on 14 characters, so any value in (0, 1) reads the same.
+_EARRING_HEAD_OVERLAP = 0.25
 
 # --- fused legs ------------------------------------------------------------------------------------
 # Legs cannot be recovered as connected components: the thighs meet, so both legs are one blob joined at
@@ -104,17 +114,29 @@ def _sub_mesh(mesh: Mesh, part_id: str, keep: list[int]) -> Mesh | None:
     )
 
 
-def _mirror_lobes(mesh: Mesh, midline_x: float) -> tuple[list[int], list[int]] | None:
-    """The mesh's two lobes as ``(left, right)`` — or ``None`` if it isn't a mirrored pair."""
+def _mirror_lobes(mesh: Mesh, midline_x: float, *, posed: bool = False) -> tuple[list[int], list[int]] | None:
+    """The mesh's two lobes as ``(left, right)`` — or ``None`` if it isn't a mirrored pair.
+
+    ``posed`` allows the two lobes to sit at different heights, for pairs a pose can move independently
+    (limbs). Facial twins should leave it off: eyes and brows are level, and letting them drift would
+    pair a feature with something that merely happens to be beside it.
+    """
     comps = mesh_components(mesh)
     if len(comps) != 2:
         return None
     a, b = comps
     if min(len(a), len(b)) < _PAIR_SIZE_RATIO * max(len(a), len(b)):
         return None                                   # a speckle beside a blob is not a pair
-    ca = _centroid([mesh.vertices[i] for i in a])
-    cb = _centroid([mesh.vertices[i] for i in b])
-    if abs(ca[1] - cb[1]) > _PAIR_LEVEL_TOL:
+    va = [mesh.vertices[i] for i in a]
+    vb = [mesh.vertices[i] for i in b]
+    ca, cb = _centroid(va), _centroid(vb)
+    if posed:
+        ha = _bbox(va)[3] - _bbox(va)[1]
+        hb = _bbox(vb)[3] - _bbox(vb)[1]
+        level_tol = max(_PAIR_LEVEL_TOL, _PAIR_POSE_LEVEL_FRAC * (ha + hb) / 2.0)
+    else:
+        level_tol = _PAIR_LEVEL_TOL
+    if abs(ca[1] - cb[1]) > level_tol:
         return None                                   # a pair sits at the same height
     if (ca[0] < midline_x) == (cb[0] < midline_x):
         return None                                   # both on one side: not a left and a right
@@ -130,7 +152,7 @@ def _looks_like_arms(
     come in mirrored pairs but sit inside the head's width; shoes sit at the feet. Both tests must hold
     for both lobes, so a garment is never mistaken for a limb.
     """
-    hx0, _, hx1, hy0 = head_box[0], head_box[1], head_box[2], head_box[1]
+    hx0, hy0, hx1, hy1 = head_box[0], head_box[1], head_box[2], head_box[3]
     _, by0, _, _ = body_box
     height = max(body_box[3] - by0, 1e-6)
     # the waistline we require the arms to stay above: part-way down from the head to the feet
@@ -139,8 +161,16 @@ def _looks_like_arms(
         verts = [mesh.vertices[i] for i in lobe]
         cx, _ = _centroid(verts)
         x0, y0, x1, y1 = _bbox(verts)
-        if hx0 <= cx <= hx1:
-            return False                              # inside the head's column — an earring, not an arm
+        # Jewellery is inside the head's column *at the head's height*. Below the chin that column is
+        # the TORSO's column, and arms live there all the time — folded, crossed, or holding something
+        # up in front of the body. Testing the column alone assumes arms hang clear of the body's
+        # centre, which is only true of the arms-at-sides pose: on a mopping character the raised
+        # forearm (x 0.466-0.572, entirely inside the head column 0.452-0.623) was rejected as an
+        # earring, and she shipped with no arms at all. So the column only condemns a lobe that
+        # actually reaches up alongside the head.
+        overlap = min(y1, hy1) - max(y0, hy0)
+        if hx0 <= cx <= hx1 and overlap > _EARRING_HEAD_OVERLAP * max(y1 - y0, 1e-6):
+            return False                              # beside the head, at head height — jewellery
         if (y1 - y0) < _ARM_MIN_HEIGHT_FRAC * height:
             return False                              # too small to be a limb
         if y1 < floor_y:
@@ -342,22 +372,39 @@ def split_bundled_pairs(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
     if not all_verts:
         return []
     body_box = _bbox(all_verts)
-    midline_x = (body_box[0] + body_box[2]) / 2.0
 
     head = [m for ly in stack.layers if (m := mesh_by_part.get(ly.id))
             and ly.semantic_role in (SemanticRole.face_base, SemanticRole.neck)]
     head_box = _bbox([v for m in head for v in m.vertices]) if head else None
+
+    # The midline decides which lobe is a left and which is a right, so it has to be the *character's*
+    # centre — and the union of every part is not that. A character holding something (a mop, a staff,
+    # a banner) has a part reaching far out to one side, which drags the union's centre off the body.
+    # Measured on a mopping character: the mop layer spans x 0.10-0.91, pulling the midline to 0.503
+    # while the body sat right of it, so BOTH arms (centroids 0.515 and 0.750) fell on the same side of
+    # it — `_mirror_lobes` rejected them as "not a left and a right" and the character got no arms at
+    # all. The head is on the midline by construction and cannot be pushed sideways by a held prop, so
+    # prefer it; fall back to the union only when there is no head to measure.
+    midline_x = ((head_box[0] + head_box[2]) / 2.0 if head_box
+                 else (body_box[0] + body_box[2]) / 2.0)
 
     created: list[str] = []
     for layer in list(stack.layers):
         mesh = mesh_by_part.get(layer.id)
         if mesh is None:
             continue
+        role = layer.semantic_role
         lobes = _mirror_lobes(mesh, midline_x)
+        # A limb pair may be posed apart, so retry the junk drawer with the pose-aware tolerance — but
+        # only if the result is recognisably the arms. Anything else off-level in the junk drawer stays
+        # unpaired, and facial twins never get the loose tolerance at all.
+        if lobes is None and role in _UNSORTED and head_box:
+            posed = _mirror_lobes(mesh, midline_x, posed=True)
+            if posed is not None and _looks_like_arms(mesh, posed, head_box=head_box, body_box=body_box):
+                lobes = posed
         if lobes is None:
             continue
 
-        role = layer.semantic_role
         twin = _TWINS.get(role)
         if twin and twin[1] not in present and twin[0] not in (present - {role}):
             roles = twin                              # 1. a one-sided role holding both sides

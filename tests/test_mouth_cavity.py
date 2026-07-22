@@ -196,6 +196,35 @@ def test_a_tall_but_light_closed_smile_still_gets_a_cavity(tmp_path):
     assert stack.by_role(R.mouth_cavity)
 
 
+def test_a_closed_mouth_with_a_bold_dark_lip_still_gets_a_cavity(tmp_path):
+    """A closed mouth drawn with a bold dark upper-lip stroke over a lighter lower lip (the three
+    hand-drawn Wikipe-tan corpus characters) puts a real fraction of its solid pixels below the
+    skin-relative dark cut — 0.17-0.25, all of it the lip line, none of it an opening. The old 0.15
+    threshold read that as 'already drawn open' and denied the cavity, so the mouths could never open and
+    the capability report inverted the truth ('no interior behind the lips'). A dark *lip* is not a dark
+    *cavity*: closed mouths cap at 0.245 across the corpus, an agape mouth is interior-dominated well
+    above that, and the threshold now sits in the gap. This fixture lands at darkfrac ~0.18."""
+    from PIL import Image, ImageDraw
+
+    d = tmp_path / "layers"
+    d.mkdir()
+    face = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    ImageDraw.Draw(face).rectangle([30, 20, 98, 110], fill=(250, 220, 205, 255))
+    face.save(d / "00_face_base.png")
+    # a tall mouth SHAPE (20x12, aspect 0.6) that is plainly SHUT: a light lower lip with a bold dark
+    # stroke across only its top — the seam, not a cavity behind parted lips.
+    mouth = Image.new("RGBA", (128, 128), (0, 0, 0, 0))
+    md = ImageDraw.Draw(mouth)
+    md.ellipse([56, 80, 76, 92], fill=(232, 190, 188, 255))   # light lower lip (not dark)
+    md.rectangle([56, 80, 76, 81], fill=(95, 45, 50, 255))    # bold dark upper-lip stroke (2px)
+    mouth.save(d / "20_mouth.png")
+
+    stack = decompose.from_layer_dir(d)
+    layer = synthesize_mouth_cavity(stack)
+    assert layer is not None                                # dark lip, not dark cavity -> still gets one
+    assert stack.by_role(R.mouth_cavity)
+
+
 def test_faint_full_canvas_scatter_does_not_suppress_the_cavity(tmp_path):
     """A See-through mouth layer carries a near-transparent halo (alpha 8-63) dusted across the whole
     canvas. PIL's raw getbbox() — anything > 0 — then returned the ENTIRE canvas, so a thin closed lip

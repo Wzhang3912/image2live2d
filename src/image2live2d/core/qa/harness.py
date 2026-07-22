@@ -226,11 +226,71 @@ def _role_bbox(rig: Rig, role: SemanticRole) -> tuple[float, float, float, float
     return min(xs), min(ys), max(xs), max(ys)
 
 
+# Every measurement above is expressed *relative to face_base*, which is only meaningful if face_base
+# actually contains the face. On `wikipetan_stand` it does not: it covers the forehead and crown only
+# (y 0.798-0.935) while the nose (0.764-0.777) and mouth (0.723-0.764) sit entirely below it. The mouth
+# is where a mouth belongs — eyes above nose above mouth — but measured against that truncated frame it
+# reads as 1.40 of the way down the face and trips `misplaced_mouth`. The check was blaming the mouth
+# for a broken reference frame, and it was the recorded trigger for backlog T9 (SAM-mouth-from-source):
+# left uncorrected it would have justified a 130MB GPU dependency to re-cut a mouth that was already
+# correct. So validate the frame BEFORE measuring anything against it.
+#
+# Measured on 13 characters: every present feature lies 1.00 inside face_base on twelve of them (lowest
+# 0.98), and on `wikipetan_stand` eye_l 0.52, eye_r 0.71, nose 0.00, mouth 0.00. Nothing in between.
+#
+# The mouth is deliberately NOT one of the features judged here. A frame has to be validated by
+# something other than the thing being measured against it: a mouth region that has itself been
+# mis-decomposed off the side of the face would otherwise condemn a perfectly good face_base and
+# suppress the very check that describes it best. Eyes and nose locate the face without that
+# circularity, and on the character that motivated this they fail the test on their own (0.52 / 0.71 /
+# 0.00) — the mouth's 0.00 is not needed to detect it.
+_FACE_MIN_FEATURE_COVER = 0.90
+_FACE_FEATURES = (SemanticRole.eye_l, SemanticRole.eye_r, SemanticRole.nose)
+
+
+def _uncovered_face_features(rig: Rig, face: tuple[float, float, float, float],
+                             ) -> list[tuple[SemanticRole, float]]:
+    """Facial features that fall outside ``face_base``'s box, as ``(role, fraction inside)``."""
+    out: list[tuple[SemanticRole, float]] = []
+    for role in _FACE_FEATURES:
+        bb = _role_bbox(rig, role)
+        if bb is None:
+            continue                                  # absent is a different problem, not this one
+        area = (bb[2] - bb[0]) * (bb[3] - bb[1])
+        if area <= 0.0:
+            continue
+        overlap = (max(0.0, min(bb[2], face[2]) - max(bb[0], face[0]))
+                   * max(0.0, min(bb[3], face[3]) - max(bb[1], face[1])))
+        inside = overlap / area
+        if inside < _FACE_MIN_FEATURE_COVER:
+            out.append((role, inside))
+    return out
+
+
+def face_coverage_issues(rig: Rig) -> list[Issue]:
+    """Flag a ``face_base`` that does not actually cover the face (see the note above)."""
+    face = _role_bbox(rig, SemanticRole.face_base)
+    if face is None or face[2] <= face[0] or face[3] <= face[1]:
+        return []                                     # `no_face` already covers a faceless rig
+    missed = _uncovered_face_features(rig, face)
+    if not missed:
+        return []
+    detail = ", ".join(f"{role.value} {inside:.2f} inside" for role, inside in missed)
+    return [Issue(Severity.warning, "face_base_incomplete",
+                  f"face_base does not cover the face ({detail}; expected at least "
+                  f"{_FACE_MIN_FEATURE_COVER}) — it has been decomposed as the forehead or a skin patch "
+                  "rather than the whole face. Anything measured against it (mouth placement, head-turn "
+                  "pivot, the face-ball the warp is built on) is measured against the wrong frame")]
+
+
 def mouth_region_issues(rig: Rig) -> list[Issue]:
     """Flag a mouth whose region is implausible relative to the face (see the envelope above).
 
     Silent when either the mouth or the face is absent — ``no_face`` already covers a faceless rig, and
-    a character with no mouth layer has no mouth region to judge.
+    a character with no mouth layer has no mouth region to judge. Also silent when ``face_base`` fails
+    to cover the face: every bound here is a fraction of the face's box, so against a truncated face the
+    numbers are meaningless and the mouth gets blamed for the face's defect. ``face_base_incomplete``
+    reports that instead.
     """
     mouth = _role_bbox(rig, SemanticRole.mouth)
     face = _role_bbox(rig, SemanticRole.face_base)
@@ -240,6 +300,8 @@ def mouth_region_issues(rig: Rig) -> list[Issue]:
     fh = face[3] - face[1]
     if fw <= 0.0 or fh <= 0.0:
         return []
+    if _uncovered_face_features(rig, face):
+        return []                                     # broken reference frame — see face_coverage_issues
 
     width = (mouth[2] - mouth[0]) / fw
     depth = (face[3] - (mouth[1] + mouth[3]) / 2.0) / fh      # y up -> distance below the face's top
@@ -292,6 +354,7 @@ def plausibility_issues(rig: Rig) -> list[Issue]:
                             f"none on the {empty}) — a profile view or a mis-decomposition, which the "
                             "front-facing rig can't drive on both sides"))
 
+    issues.extend(face_coverage_issues(rig))
     issues.extend(mouth_region_issues(rig))
     return issues
 

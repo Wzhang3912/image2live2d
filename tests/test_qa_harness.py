@@ -205,3 +205,49 @@ def test_the_check_is_silent_without_a_mouth_or_without_a_face():
     assert not any("mouth" in c for c in mouth_codes)
     faceless = _codes(_build([("hair_front", R.hair_front, (0.2, 0.6, 0.8, 0.95)), _REAL_MOUTH]))
     assert not any("mouth" in c for c in faceless)
+
+
+# --- face_base coverage: the reference frame the mouth check measures against ----------------------
+# `wikipetan_stand` decomposed with a face_base covering only the forehead and crown (y 0.798-0.935)
+# while the nose (0.764-0.777) and mouth (0.723-0.764) sat entirely below it. Eyes above nose above
+# mouth: the mouth is anatomically correct, but measured against that truncated frame it reads as 1.40
+# of the way down the face and tripped `misplaced_mouth`. That misattribution was the recorded trigger
+# for backlog T9 (SAM-mouth-from-source) — a check blaming the mouth for the face's defect would have
+# justified a 130MB GPU dependency to re-cut a mouth that was already right.
+_FOREHEAD_ONLY = ("face_base", R.face_base, (0.2, 0.62, 0.8, 0.9))   # top third of the face only
+
+
+def test_a_face_base_that_misses_the_face_is_flagged():
+    codes = _codes(_build([_FOREHEAD_ONLY,
+                           ("nose", R.nose, (0.47, 0.35, 0.53, 0.42)),
+                           _REAL_MOUTH]))
+    assert "face_base_incomplete" in codes
+
+
+def test_an_anatomically_correct_mouth_is_not_blamed_for_a_truncated_face():
+    """The regression itself: with the frame broken, the mouth check must stay silent and let
+    `face_base_incomplete` report the real defect. Otherwise the pipeline confidently names the wrong
+    part, and the fix it argues for would not have fixed anything."""
+    codes = _codes(_build([_FOREHEAD_ONLY,
+                           ("eye_l", R.eye_l, (0.30, 0.70, 0.45, 0.78)),
+                           ("nose", R.nose, (0.47, 0.35, 0.53, 0.42)),
+                           _REAL_MOUTH]))
+    assert "face_base_incomplete" in codes
+    assert not any("mouth" in c for c in codes)
+
+
+def test_a_face_base_covering_the_whole_face_is_not_flagged():
+    """Twelve of thirteen real characters put every feature 1.00 inside face_base (lowest 0.98), so a
+    normal face must never trip this."""
+    codes = _codes(_build([_FACE,
+                           ("eye_l", R.eye_l, (0.30, 0.55, 0.45, 0.63)),
+                           ("eye_r", R.eye_r, (0.55, 0.55, 0.70, 0.63)),
+                           ("nose", R.nose, (0.47, 0.35, 0.53, 0.42)),
+                           _REAL_MOUTH]))
+    assert "face_base_incomplete" not in codes
+
+
+def test_the_coverage_check_is_silent_without_a_face():
+    """`no_face` already covers a faceless rig; a second warning would be noise."""
+    codes = _codes(_build([("hair_front", R.hair_front, (0.2, 0.6, 0.8, 0.95)), _REAL_MOUTH]))
+    assert "face_base_incomplete" not in codes

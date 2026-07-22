@@ -110,6 +110,61 @@ def test_earrings_are_not_mistaken_for_arms():
     assert all(r is not R.arm_l and r is not R.arm_r for r in _roles(stack).values())
 
 
+# --- rule 2b: the arms of a character who is not standing to attention ------------------------------
+# Every scene below uses the real model-space geometry of `wikipetan_mop` (a character mopping a floor:
+# one arm raised to the mop handle, the other down, a mop spanning most of the canvas). Three separate
+# rules each assumed the arms-at-sides pose that all eight of the original test characters happen to
+# share, and they failed in series, so each of these tests fails on its own before its fix.
+# head box (face+neck union) and body box match the measured ones: (0.452, 0.691, 0.623, 0.902) and
+# (0.097, 0.012, 0.909, 0.975). Both matter — the shoulder ceiling is measured from the head's base and
+# scaled by the body's height, so a fixture with no legs puts the ceiling below the raised arm.
+_MOP_BODY = [
+    ("face", R.face_base, [(0.452, 0.691, 0.623, 0.902)]),
+    ("neck", R.neck, [(0.50, 0.691, 0.57, 0.74)]),
+    ("torso", R.clothing, [(0.44, 0.30, 0.66, 0.69)]),
+    ("legs", R.clothing, [(0.44, 0.012, 0.66, 0.30)]),
+]
+
+
+def test_a_held_prop_does_not_drag_the_midline_off_the_body():
+    """The midline sorts the lobes into a left and a right, so it must be the *character's* centre. Taken
+    from the union of every part it is not: the mop spans x 0.10-0.91 and pulls it to 0.503 while the
+    body sits right of it, so both arms (cx 0.519 and 0.743) land on the same side and the pair is
+    rejected as "not a left and a right". The head cannot be pushed sideways by something she holds."""
+    stack, meshes = _scene([
+        *_MOP_BODY,
+        ("mop", R.other, [(0.097, 0.012, 0.909, 0.30)]),
+        ("arms", R.accessory, [(0.466, 0.386, 0.572, 0.688), (0.651, 0.578, 0.835, 0.770)]),
+    ])
+    split_bundled_pairs(stack, meshes)
+    assert set(_roles(stack).values()) >= {R.arm_l, R.arm_r}
+
+
+def test_arms_at_different_heights_are_still_a_pair():
+    """One arm raised to the mop handle, one down: the centroids differ by 0.137, well past the 0.10 that
+    keeps *facial* twins level. Eyes and brows are level by anatomy; limbs are not, and a pose moves one
+    without the other. Facial twins must keep the strict tolerance, so this loosens only for limbs."""
+    stack, meshes = _scene([
+        *_MOP_BODY,
+        ("arms", R.accessory, [(0.466, 0.386, 0.572, 0.688), (0.651, 0.578, 0.835, 0.770)]),
+    ])
+    split_bundled_pairs(stack, meshes)
+    assert set(_roles(stack).values()) >= {R.arm_l, R.arm_r}
+
+
+def test_an_arm_in_front_of_the_body_is_not_jewellery():
+    """Arms folded across the chest sit inside the head's *column* — but below the chin, where that
+    column is the torso's, not the head's. The earring rule tested the column alone, so a raised forearm
+    (x 0.466-0.572, inside the head column 0.452-0.623) read as an earring and the character shipped with
+    no arms. Jewellery is beside the head; these lobes are entirely below it."""
+    stack, meshes = _scene([
+        *_MOP_BODY,
+        ("arms", R.accessory, [(0.46, 0.36, 0.52, 0.66), (0.55, 0.36, 0.61, 0.66)]),
+    ])
+    split_bundled_pairs(stack, meshes)
+    assert set(_roles(stack).values()) >= {R.arm_l, R.arm_r}
+
+
 def test_headwear_is_not_mistaken_for_arms():
     """Regression (backlog T10): a wide-brimmed hat clears every other arm test — its two lobes are a
     mirrored pair, they sit outside the head's narrow column, they are tall enough, and they are nowhere

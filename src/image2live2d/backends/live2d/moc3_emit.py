@@ -446,9 +446,10 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         _fxs = [v[0] for p, m in _dm if p.id in head_ids and p.semantic_role not in _hair for v in m.vertices]
         _fys = [v[1] for p, m in _dm if p.id in head_ids and p.semantic_role not in _hair for v in m.vertices]
         _fref = sum(_fys) / len(_fys) if _fys else 0.5
-        # The head BALL (face parts only — long hair would inflate it): centre + radius of the sphere the
-        # turn happens on. Used to recover each grid point's DEPTH, which is what a turn needs and a
-        # squash lacks. Falls back to the head-group bbox when there are no face parts.
+        # The head DOME (face parts only — long hair would inflate it): centre + x-radius of the ellipsoid
+        # the turn happens on. Used to recover each grid point's DEPTH, which is what a turn needs and a
+        # squash lacks. The vertical semi-axis (_sry, below) is set separately so the dome reaches the
+        # neck. Falls back to the head-group bbox when there are no face parts.
         if _fxs and _fys:
             _sx, _sy = (min(_fxs) + max(_fxs)) / 2.0, (min(_fys) + max(_fys)) / 2.0
             _srad = max((max(_fxs) - min(_fxs)) / 2.0, 1e-6)
@@ -460,7 +461,7 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         # Pivot = the base of the FACE toward the body (the neck junction). Computed from face parts,
         # NOT the whole head group: floor-length hair (a gown veil, drill-curls to the feet) drags the
         # head-group bbox all the way down, so a group-based pivot sits at the hair TIP near the feet.
-        # The yaw/pitch SQUASH is about the face-ball centre (_sx) so it survived that, but the ROLL is a
+        # The yaw/pitch SQUASH is about the face-dome centre (_sx) so it survived that, but the ROLL is a
         # rotation about THIS pivot — and rotating the head about a point by its feet slides it clean off
         # the neck (seen at the roll extreme on floor-length-hair characters). The neck is the base of the
         # FACE, which long hair can't move. Fall back to the head group only when there are no face parts.
@@ -469,6 +470,13 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         _pys = _fys if _fys else _hys
         _pivot = (_sx if _sx is not None else (sum(_hxs) / len(_hxs) if _hxs else 0.5),
                   (max(_pys) if _dir > 0 else min(_pys)) if _pys else 0.5)
+        # Depth model = a VERTICALLY-ELONGATED ellipsoid, not a sphere (RIVAL_HARVEST_BACKLOG T6). A
+        # sphere puts its top/bottom poles inside the face (a face is taller than it is wide), so those
+        # rows get ~0 depth and PITCH pinches them together — a vertical squash, not a nod (measured: top
+        # sweeps +0.057, chin -0.032, opposite ways). Stretching the vertical semi-axis to reach the NECK
+        # makes depth ~constant down each column through the face (a cylinder there → the column nods as a
+        # rigid unit), while the pole still lands at the neck so the neck keeps its ~0-depth anchor.
+        _sry = max(abs(_pivot[1] - _sy), _srad) if _srad is not None else None
         _kp = [sorted(kf.value for kf in pmap[pid].keyforms) for pid in turn_ids]
         _tot = 1
         for _k in _kp:
@@ -523,17 +531,18 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                     # We had the cos term and not the sin one, which is a pure horizontal SCALE — so the
                     # two eyes drifted APART toward the centre line instead of sweeping together, and a
                     # full ±30° yaw read as the face getting narrower (2.8% of model width, vs 17% for
-                    # roll). Recover z from the head ball and add the missing term.
+                    # roll). Recover z from the head dome and add the missing term.
                     #
                     # This also anchors the neck for free, which is why translating used to stretch it:
-                    # the neck junction sits at the ball's bottom pole where z≈0, so it gets no sweep on
-                    # its own, while the face (z≈radius) gets the full one. No taper needed — the sphere
+                    # the neck junction sits at the dome's bottom pole where z≈0, so it gets no sweep on
+                    # its own, while the face (z≈radius) gets the full one. No taper needed — the dome
                     # already says where the head is deep and where it is edge-on.
                     if _srad is None:
                         z = 0.0
                     else:
-                        _r2 = _srad * _srad - (px_ - _sx) ** 2 - (py_ - _sy) ** 2
-                        z = math.sqrt(_r2) if _r2 > 0.0 else 0.0        # 0 outside the ball (hair, edges)
+                        # Ellipsoid depth: x-radius _srad, vertical semi-axis _sry (reaches the neck).
+                        _q = 1.0 - ((px_ - _sx) / _srad) ** 2 - ((py_ - _sy) / _sry) ** 2
+                        z = _srad * math.sqrt(_q) if _q > 0.0 else 0.0  # 0 outside the dome (hair, edges)
                     return (_sx + (px_ - _sx) * cyaw + z * syaw,
                             _sy + (py_ - _sy) * cpit + z * spit)
 

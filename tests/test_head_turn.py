@@ -80,6 +80,38 @@ def test_eyes_stay_rigid_while_the_head_narrows_at_the_yaw_extreme(tmp_path):
     assert w1("00_face_base") / w0("00_face_base") < 0.995
 
 
+@pytest.mark.skipif(not _have_core(), reason="Live2DCubismCore not found (set CUBISM_CORE); proprietary")
+def test_pitch_is_a_coherent_nod_not_a_vertical_squash(tmp_path):
+    """Runtime-truth for RIVAL_HARVEST_BACKLOG T6. A spherical depth dome puts its poles inside the face,
+    so under pitch the top of the head and the chin moved in OPPOSITE directions (top +0.057 / chin
+    -0.032) — the head pinched vertically instead of nodding. The vertically-elongated ellipsoid dome
+    gives each column ~constant depth through the face, so the whole head sweeps ONE way (a nod), while
+    the pole still lands at the neck to keep it anchored."""
+    import cubism_core
+
+    m = cubism_core.Model(str(_emit_sample_moc3(tmp_path)))
+
+    def face_ys():
+        i = m._draw_ids.index("00_face_base")
+        return [y for _, y in m._positions()[i]]
+
+    m.reset()
+    y0 = face_ys()
+    m.set_param("ParamAngleY", 30.0)
+    m.update()
+    y1 = face_ys()
+    m.reset()
+    order = sorted(range(len(y0)), key=lambda i: y0[i])
+    n = max(1, len(order) // 5)
+    lo = sum(y1[i] - y0[i] for i in order[:n]) / n            # rows at min y (core is y-up)
+    hi = sum(y1[i] - y0[i] for i in order[-n:]) / n           # rows at max y
+    # The two ends must not sweep strongly toward each other (the vertical-squash signature: they were
+    # +0.057 / -0.032, ratio -0.56). A nod sweeps them the same way; the far end may be near zero but not
+    # strongly opposite. This separates the fixed dome (~+0.09 ratio) from the pinching sphere.
+    far, near = (lo, hi) if abs(lo) < abs(hi) else (hi, lo)
+    assert far > -0.15 * abs(near), f"head ends swept {lo:+.4f} / {hi:+.4f} — pitch is pinching, not nodding"
+
+
 def _head_warp(tmp_path):
     """Emit the sample rig, capturing the head warp-deformer grid the emitter builds."""
     pytest.importorskip("PIL")

@@ -9,8 +9,6 @@ import ast
 import importlib.util
 from pathlib import Path
 
-import pytest
-
 _PATCHER = (
     Path(__file__).resolve().parents[1] / "service/seethrough/patches/guard_empty_head_crop.py"
 )

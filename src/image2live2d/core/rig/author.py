@@ -379,10 +379,6 @@ def author_rig(
                              SemanticRole.leg_l, SemanticRole.leg_r})
     all_limb_candidates = [(layer.id, mesh_by_part[layer.id]) for layer in stack.layers
                            if layer.id in mesh_by_part and layer.semantic_role not in _LIMB_ROLES]
-    # garment parts a limb's overlapping region can ride (a jacket sleeve, a dress panel) — skinned to
-    # the limb by _limb_follow so the sleeve rotates with the arm without splitting the clothing layer.
-    clothing_candidates = [(layer.id, mesh_by_part[layer.id]) for layer in stack.layers
-                           if layer.id in mesh_by_part and layer.semantic_role == SemanticRole.clothing]
     # The character's horizontal midline — the reference for "outward". A limb rotates the SAME absolute
     # direction for a given param sign, so without mirroring, driving both arms to +max lifts one and
     # drops the other: you literally cannot raise both arms at once. Negating the rotation for the limb
@@ -398,21 +394,16 @@ def author_rig(
         limb = members(role)
         if not limb:
             continue
-        joint, elbow, end = _limb_joints([m for _, m in limb])               # joint from the limb only
         # A limb has to carry whatever rides its distal end — the shoe at a foot, a cuff at a wrist —
         # or articulation moves the leg and leaves the shoe standing on the floor (the second half of
         # the leg-disconnect the render showed). Those parts are separate layers (footwear arrives as
         # its own "clothing"), so we find them by geometry: sitting at/below the limb's far end, within
         # its lateral span. They then swing and bend with the limb like the rest of it.
         riders = _limb_riders([m for _, m in limb], all_limb_candidates)
-        rider_ids = {pid for pid, _ in riders}
-        # A garment overlapping the limb (a jacket sleeve) rides its SWING with a tapered weight, so it
-        # bends off the torso instead of the bare arm tearing out of a static sleeve.
-        follow = _limb_follow([m for _, m in limb], joint, end, _mid_x,
-                              [(pid, m) for pid, m in clothing_candidates if pid not in rider_ids])
         limb = limb + riders
+        joint, elbow, end = _limb_joints([m for _, m in members(role)])      # joint from the limb only
         side = 1.0 if joint[0] >= _mid_x else -1.0    # +param lifts/splays OUTWARD on both sides
-        params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side, follow=follow))  # swing
+        params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side))       # whole-limb swing
         params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg * side))   # lower-segment bend
 
     # --- Breath (subtle whole-character bob) ----------------------------------------------------
@@ -711,44 +702,32 @@ def _head_turn(
 
 
 def _rotation(param_id: str, head: list[tuple[str, Mesh]], center: Vec2, *, deg: float,
-              neck: list[tuple[str, Mesh]] | None = None,
-              follow: list[tuple[str, Mesh, list[float]]] | None = None) -> Parameter:
+              neck: list[tuple[str, Mesh]] | None = None) -> Parameter:
     """Rigid roll about ``center`` by ``deg`` at the extreme (ParamAngleZ / ParamBodyAngleZ).
 
     ``neck`` parts (optional) get a **tapered twist**: each neck vertex rotates about the same centre
     by ``deg`` scaled by a vertical weight (1 at the neck top → follows the head roll, 0 at the
     shoulders → stays), so the head stays joined to the neck when it tilts (matching the head-turn
-    neck follow).
-
-    ``follow`` parts (optional) get a **per-vertex weighted** rotation about the same centre — used to
-    make an overlapping garment (a jacket sleeve, a dress panel) ride a limb without splitting the
-    layer: weight 1 over the limb rotates it rigidly with the arm, tapering to 0 at the torso seam so
-    the continuous garment mesh bends there instead of tearing."""
+    neck follow)."""
     cx, cy = center
     if neck:
         ny0 = min(y for _, m in neck for _, y in m.vertices)
         ny1 = max(y for _, m in neck for _, y in m.vertices)
         nspan = max(ny1 - ny0, 1e-6)
 
-    def _weighted(m: Mesh, weights: list[float], theta: float) -> list[Vec2]:
-        cell = []
-        for (x, y), w in zip(m.vertices, weights):
-            a = theta * w
-            c, s = math.cos(a), math.sin(a)
-            rx, ry = x - cx, y - cy
-            cell.append((cx + rx * c - ry * s - x, cy + rx * s + ry * c - y))
-        return cell
-
     def at(sign: float) -> dict[str, list[Vec2]]:
         theta = sign * math.radians(deg)
         offs = {pid: _rotate(m, center, theta) for pid, m in head}
         if neck:
             for pid, m in neck:
-                weights = [_clamp((y - ny0) / nspan, 0.0, 1.0) for _, y in m.vertices]
-                offs[pid] = _weighted(m, weights, theta)
-        if follow:
-            for pid, m, weights in follow:
-                offs[pid] = _weighted(m, weights, theta)
+                cell = []
+                for x, y in m.vertices:
+                    w = _clamp((y - ny0) / nspan, 0.0, 1.0)
+                    a = theta * w
+                    c, s = math.cos(a), math.sin(a)
+                    rx, ry = x - cx, y - cy
+                    cell.append((cx + rx * c - ry * s - x, cy + rx * s + ry * c - y))
+                offs[pid] = cell
         return offs
 
     return _tri(param_id, at)
@@ -1106,53 +1085,6 @@ def _limb_riders(
         if lo <= cy1 <= hi and lx0 <= ccx <= lx1:      # top at the limb's end, and in its column
             riders.append((pid, m))
     return riders
-
-
-# A garment (jacket sleeve, dress panel) rides a limb where it OVERLAPS it. Unlike a rider (which sits
-# at the distal end and moves rigidly), a sleeve overlaps the whole limb, so it gets a per-vertex weight:
-# 1 over the limb (rotates with the arm), tapering to 0 in a band at the shoulder/hip seam so the
-# continuous garment mesh bends there instead of tearing off the torso. This is how a jacket sleeve
-# follows its arm without splitting the clothing layer.
-_FOLLOW_SEAM_BAND = 0.35    # taper zone at the joint, as a fraction of the limb's height
-_FOLLOW_X_OUT = 1.1         # widen the limb's column OUTWARD (away from midline) by this ×its width —
-_FOLLOW_X_IN = 0.15         # a puffy sleeve is wider than the bare arm; the INNER edge stays tight (torso)
-
-
-def _limb_follow(
-    limb_meshes: list[Mesh], joint: Vec2, end: Vec2, mid_x: float,
-    candidates: list[tuple[str, Mesh]],
-) -> list[tuple[str, Mesh, list[float]]]:
-    """Per-vertex weights so garment parts overlapping a limb ride its swing. Returns
-    ``[(pid, mesh, weights)]`` for parts with meaningful overlap; a torso-only part gets all-zero
-    weights and is dropped."""
-    lx0, _, lx1, _ = _union_bbox(limb_meshes)
-    lw = max(lx1 - lx0, 1e-6)
-    jy = joint[1]                                       # shoulder/hip (top, y-up)
-    _, ey = end                                         # wrist/ankle (bottom)
-    span = max(jy - ey, 1e-6)
-    band = max(_FOLLOW_SEAM_BAND * span, 1e-6)
-    # widen the column outward (the sleeve flares away from the body), keep the inner edge tight (torso)
-    if (lx0 + lx1) / 2.0 >= mid_x:                      # limb on the right of the body -> flare right
-        gx0, gx1 = lx0 - _FOLLOW_X_IN * lw, lx1 + _FOLLOW_X_OUT * lw
-    else:
-        gx0, gx1 = lx0 - _FOLLOW_X_OUT * lw, lx1 + _FOLLOW_X_IN * lw
-    ylo, yhi = ey - 0.10 * span, jy + band
-    out: list[tuple[str, Mesh, list[float]]] = []
-    for pid, m in candidates:
-        weights: list[float] = []
-        mw, n = 0.0, 0
-        for x, y in m.vertices:
-            if gx0 <= x <= gx1 and ylo <= y <= yhi:
-                w = _clamp((jy - y) / band, 0.0, 1.0)   # 0 at the seam -> 1 over the limb
-            else:
-                w = 0.0
-            weights.append(w)
-            if w > 0.05:
-                n += 1
-            mw = max(mw, w)
-        if mw > 0.3 and n >= 3:
-            out.append((pid, m, weights))
-    return out
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:

@@ -110,9 +110,9 @@ puppet can and can't do, and QA flags implausible geometry (e.g. an off-centre m
 
 ### …on any character, any style
 
-Nine characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth physics),
-straight from a single illustration. Gothic and schoolgirl anime, ornate gowns, a chibi, a male
-character, and non-human mascots (a Krita squirrel, a Kate bird):
+Six characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth physics),
+straight from a single illustration. Gothic and schoolgirl anime, ornate gowns, a minimalist look, and
+a male character:
 
 <table align="center">
   <tr>
@@ -121,14 +121,9 @@ character, and non-human mascots (a Krita squirrel, a Kate bird):
     <td><img src="media/cells/lavendergown.gif" width="230" alt="lavendergown — ornate gown"></td>
   </tr>
   <tr>
-    <td><img src="media/cells/chibi.gif"        width="230" alt="chibi — super-deformed"></td>
-    <td><img src="media/cells/male.gif"         width="230" alt="male — casual"></td>
     <td><img src="media/cells/silverdress.gif"  width="230" alt="silverdress — minimalist"></td>
-  </tr>
-  <tr>
+    <td><img src="media/cells/male.gif"         width="230" alt="male — casual"></td>
     <td><img src="media/cells/blondedrills.gif" width="230" alt="blondedrills — drill-hair"></td>
-    <td><img src="media/cells/kiki.gif"         width="230" alt="kiki — Krita squirrel"></td>
-    <td><img src="media/cells/woodpecker.gif"   width="230" alt="woodpecker — Kate bird"></td>
   </tr>
 </table>
 

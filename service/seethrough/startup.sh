@@ -25,12 +25,39 @@ apt-get update
 # "ImportError: libGL.so.1: cannot open shared object file" on headless servers.
 apt-get install -y git python3.12 python3.12-venv libgl1 libglib2.0-0
 
-# 1. See-through source
+# 1. See-through source, PINNED to a known commit. See-through's `main` is a moving target (its
+# requirements + HF model weights float), so an unpinned clone made our decompose non-reproducible —
+# the same input gave different layer sets across runs. Pin the code so our vendored patches apply
+# against a known shape and behaviour is stable. Override with `--metadata=seethrough-commit=<sha>`.
+SEE_THROUGH_COMMIT="$(meta seethrough-commit)"; SEE_THROUGH_COMMIT="${SEE_THROUGH_COMMIT:-58a1cb11d13f85acec9bbddb8cd4b6487843d4cf}"
 if [ ! -d "$SEE_THROUGH_DIR" ]; then
   git clone https://github.com/shitagaki-lab/see-through.git "$SEE_THROUGH_DIR"
 fi
 cd "$SEE_THROUGH_DIR"
+git fetch --quiet origin "$SEE_THROUGH_COMMIT" 2>/dev/null || git fetch --quiet origin || true
+git checkout --quiet "$SEE_THROUGH_COMMIT" || echo "WARNING: could not pin See-through to $SEE_THROUGH_COMMIT — using default HEAD"
 ln -sf common/assets assets || true
+
+# 1b. Vendored robustness patches (image2live2d). See-through crashes the WHOLE decompose on inputs it
+# doesn't fully segment:
+#   - guard_empty_head_crop: the 'head' body segment comes out empty on some non-human faces (dragon
+#     mascots) -> degenerate head crop -> cv2.resize on a zero-size image. Skips head sub-part refinement.
+#   - guard_missing_part_pngs: load_parts does a bare Image.open on every tag from info.json; a tag whose
+#     PNG is absent (head parts skipped above, OR a tag that came out empty this run) -> FileNotFoundError.
+#     Skips absent tags. Together they turn a hard crash into graceful degradation (a coarser rig).
+# Fetched from our public repo; each is non-fatal (|| echo) so an upstream shape change just leaves us
+# unpatched rather than aborting boot. PATCH_REF selects the branch (default main).
+PATCH_REF="$(meta patch-ref)"; PATCH_REF="${PATCH_REF:-main}"
+PATCH_BASE="https://raw.githubusercontent.com/Wzhang3912/image2live2d/${PATCH_REF}/service/seethrough/patches"
+apply_patch() {  # <patcher-file> <target-relpath> <label>
+  if curl -fsSL "$PATCH_BASE/$1" -o "/tmp/$1"; then
+    python3 "/tmp/$1" "$SEE_THROUGH_DIR/$2" || echo "WARNING: $3 not applied (anchor not found?) — serving unpatched"
+  else
+    echo "WARNING: could not fetch $1 from $PATCH_BASE — serving unpatched"
+  fi
+}
+apply_patch guard_empty_head_crop.py  common/utils/inference_utils.py  "empty-head-crop guard"
+apply_patch guard_missing_part_pngs.py common/utils/io_utils.py         "missing-tag-PNG guard"
 
 # 2. Python env + deps (base PSD path only; skip detectron2/mmdet/SAM2 install-hell tiers)
 python3.12 -m venv "$VENV"

@@ -1,5 +1,4 @@
-<!-- Optional: drop a logo at media/logo.png and uncomment.
-<p align="center"><img src="media/logo.png" alt="image2live2d" width="120"></p> -->
+<p align="center"><img src="media/logo.svg" alt="image2live2d" width="112" height="112"></p>
 
 <h1 align="center">image2live2d</h1>
 

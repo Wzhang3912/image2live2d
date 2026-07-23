@@ -1,0 +1,14 @@
+<svg width="256" height="256" viewBox="0 0 256 256" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="image2live2d logo">
+  <defs>
+    <linearGradient id="i2l-logo-g" x1="16" y1="16" x2="240" y2="240" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#7C3AED"/>
+      <stop offset="1" stop-color="#DB2777"/>
+    </linearGradient>
+  </defs>
+  <rect x="16" y="16" width="224" height="224" rx="60" fill="url(#i2l-logo-g)"/>
+  <ellipse cx="128" cy="132" rx="80" ry="30" fill="none" stroke="#ffffff" stroke-opacity="0.42"
+           stroke-width="6" stroke-dasharray="3 15" stroke-linecap="round" transform="rotate(-12 128 132)"/>
+  <circle cx="103" cy="112" r="13" fill="#ffffff"/>
+  <path d="M141 115 Q154 103 167 115" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+  <path d="M100 152 Q128 180 156 152" fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

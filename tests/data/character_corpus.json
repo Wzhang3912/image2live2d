@@ -117,6 +117,45 @@
     "min_physics_chains": 11,
     "plausibility": []
   },
+  "katie": {
+    "capabilities": [
+      "body_sway"
+    ],
+    "min_parts": 4,
+    "min_physics_chains": 4,
+    "plausibility": [
+      "no_face"
+    ]
+  },
+  "kiki": {
+    "capabilities": [
+      "arm_left",
+      "arm_right",
+      "blink_left",
+      "blink_right",
+      "body_sway",
+      "brow_left",
+      "brow_right",
+      "expressions",
+      "gaze",
+      "head_turn",
+      "mouth_form",
+      "mouth_open"
+    ],
+    "min_parts": 19,
+    "min_physics_chains": 4,
+    "plausibility": []
+  },
+  "konqi": {
+    "capabilities": [
+      "body_sway"
+    ],
+    "min_parts": 1,
+    "min_physics_chains": 1,
+    "plausibility": [
+      "no_face"
+    ]
+  },
   "lavendergown": {
     "capabilities": [
       "arm_left",
@@ -136,6 +175,18 @@
     ],
     "min_parts": 29,
     "min_physics_chains": 8,
+    "plausibility": []
+  },
+  "libbie": {
+    "capabilities": [
+      "body_sway",
+      "expressions",
+      "head_turn",
+      "mouth_form",
+      "mouth_open"
+    ],
+    "min_parts": 10,
+    "min_physics_chains": 5,
     "plausibility": []
   },
   "male": {
@@ -260,6 +311,20 @@
     "min_physics_chains": 7,
     "plausibility": [
       "face_base_incomplete"
+    ]
+  },
+  "woodpecker": {
+    "capabilities": [
+      "body_sway",
+      "expressions",
+      "head_turn",
+      "mouth_form",
+      "mouth_open"
+    ],
+    "min_parts": 11,
+    "min_physics_chains": 7,
+    "plausibility": [
+      "off_centre_mouth"
     ]
   }
 }

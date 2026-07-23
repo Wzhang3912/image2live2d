@@ -51,6 +51,8 @@ docs/
 # Demo media referenced by the README (explicitly allowed past the image rules above)
 !media/
 !media/demo.gif
+!media/cells/
+!media/cells/*.gif
 
 # Generated artifacts
 out/

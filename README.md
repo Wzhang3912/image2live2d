@@ -24,10 +24,10 @@
 </p>
 
 <p align="center">
-  <img src="media/demo.gif" alt="Drop a character image → automatic decompose, rig & physics → live render in the browser" width="720">
+  <a href="media/demo.mp4"><img src="media/demo.gif" alt="image2live2d: one illustration → auto-decompose → auto-rig → live puppet, then the same pipeline across nine character styles" width="820"></a>
 </p>
 
-<p align="center"><i>Drop a character image — it's automatically decomposed, rigged, and rendered live: idling on its own and following the cursor.</i></p>
+<p align="center"><i>One illustration → auto-decompose → auto-rig → live puppet — then the same pipeline across nine wildly different styles. &nbsp;<a href="media/demo.mp4">▶ Full-quality MP4</a></i></p>
 
 ---
 
@@ -108,8 +108,29 @@ drive all backends. Out of the box a generated rig animates:
 The pipeline also self-diagnoses: a per-character **capability report** tells you honestly what a given
 puppet can and can't do, and QA flags implausible geometry (e.g. an off-centre mouth on a ¾ view).
 
-<!-- Media slot: a 2×3 grid of short .mov clips (blink / lip-sync / head-turn / gaze / hair-physics / idle)
-     would make this section shine. Drop them under media/caps/ and embed as a table of <video>/<img> here. -->
+### …on any character, any style
+
+Nine characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth physics),
+straight from a single illustration. Gothic and schoolgirl anime, ornate gowns, a chibi, a male
+character, and non-human mascots (a Krita squirrel, a Kate bird):
+
+<table align="center">
+  <tr>
+    <td><img src="media/cells/catgirl.gif"     width="230" alt="catgirl — gothic anime"></td>
+    <td><img src="media/cells/twintails.gif"    width="230" alt="twintails — schoolgirl"></td>
+    <td><img src="media/cells/lavendergown.gif" width="230" alt="lavendergown — ornate gown"></td>
+  </tr>
+  <tr>
+    <td><img src="media/cells/chibi.gif"        width="230" alt="chibi — super-deformed"></td>
+    <td><img src="media/cells/male.gif"         width="230" alt="male — casual"></td>
+    <td><img src="media/cells/silverdress.gif"  width="230" alt="silverdress — minimalist"></td>
+  </tr>
+  <tr>
+    <td><img src="media/cells/blondedrills.gif" width="230" alt="blondedrills — drill-hair"></td>
+    <td><img src="media/cells/kiki.gif"         width="230" alt="kiki — Krita squirrel"></td>
+    <td><img src="media/cells/woodpecker.gif"   width="230" alt="woodpecker — Kate bird"></td>
+  </tr>
+</table>
 
 ## Input
 

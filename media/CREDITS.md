@@ -16,8 +16,6 @@ same share-alike license.
 | Character | Title | Author | License | Source |
 |---|---|---|---|---|
 | `animepedia_mascot` | Animepedia Mascot | Kasuga39 | CC BY-SA 3.0 | https://commons.wikimedia.org/wiki/File:Animepedia_Mascot_by_Kasuga39.jpg |
-| `pleromafox` | Pleroma-fox-tan (shy) | Pleroma project | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Pleroma-fox-tan-shy.png |
-| `asiatan` | Asia-tan | MinieSakuo | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Asia-tan.png |
 | `wikispecies` | Wikispecies-Tan | User:痛 | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Wikispecies-Tan.png |
 
 ## Not shown / evaluation only

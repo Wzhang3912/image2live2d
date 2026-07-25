@@ -108,6 +108,19 @@ drive all backends. Out of the box a generated rig animates:
 The pipeline also self-diagnoses: a per-character **capability report** tells you honestly what a given
 puppet can and can't do, and QA flags implausible geometry (e.g. an off-centre mouth on a ¾ view).
 
+### …in motion
+
+Idle is just the loop it ships with — the same rig drives a whole **motion library**. Here's one
+auto-rigged character running eight of them: head turn, head tilt, body sway, arm and leg articulation,
+lip-sync, blink, and an expression — every clip a real Cubism-core render with the hair &amp; cloth
+**physics** simulated on top (watch the hair and skirt trail the motion, not just snap to it).
+
+<p align="center">
+  <a href="media/motion_reel.mp4"><img src="media/motion_reel.gif" alt="one auto-rigged character running eight motions from the built-in library — head turn, tilt, body sway, arms, legs, lip-sync, blink, expression — with hair and cloth physics" width="760"></a>
+</p>
+
+<p align="center"><i>One character, eight motions from the built-in library — deformation by the native Cubism core, hair/cloth physics simulated on top. &nbsp;<a href="media/motion_reel.mp4">▶ MP4</a></i></p>
+
 ### …across a range of styles
 
 Sixteen characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth

@@ -233,6 +233,59 @@ def test_legs_swing_splays_the_feet_and_never_crosses():
     assert (r_splay - l_splay) > (r_rest - l_rest), "feet did not splay apart"  # widened, not narrowed
 
 
+def test_legs_sway_moves_the_feet_in_parallel_and_never_crosses():
+    """The natural weight-shift clip drives the two legs with *opposite* param signs so they lean the
+    same screen direction together. Unlike the toward-each-other rotation that caused the original X,
+    parallel motion preserves the gap between the feet — at either ping-pong extreme they must not
+    cross and must keep roughly their standing spacing (never collapse toward a cross)."""
+    from image2live2d.core.motion import generate_drives
+
+    parts = [("leg_l", R.leg_l, (0.42, 0.05, 0.48, 0.45)),
+             ("leg_r", R.leg_r, (0.52, 0.05, 0.58, 0.45))]
+    layers, meshes = [], []
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=64, height=64))
+        meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=3))
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    params = author_rig(stack, meshes, select_template(stack), landmarks=None).parameters
+    by_id = {p.id: p for p in params}
+    mesh_by = {m.part_id: m for m in meshes}
+
+    pose = next(a for a in generate_drives(params) if a.name == "legs_sway")
+    fracs = {ln.param_id: max((kf.value for kf in ln.keyframes), key=abs) / 10.0 for ln in pose.lanes}
+
+    def foot_x(part_id: str, flip: float) -> float:
+        m = mesh_by[part_id]
+        bot = min(y for _, y in m.vertices)
+        off = [0.0] * len(m.vertices)
+        for pid, frac in fracs.items():
+            p = by_id.get(pid)
+            if not p:
+                continue
+            val = p.max if frac * flip > 0 else p.min
+            kf = next((k for k in p.keyforms if k.value == val), None)
+            if kf and part_id in kf.mesh_offsets:
+                for i, (dx, _dy) in enumerate(kf.mesh_offsets[part_id]):
+                    off[i] += dx * abs(frac)
+        foot = [x + off[i] for i, (x, y) in enumerate(m.vertices) if y <= bot + 0.02]
+        return sum(foot) / len(foot)
+
+    def rest_gap() -> float:
+        def rx(pid):
+            m = mesh_by[pid]; bot = min(y for _, y in m.vertices)
+            f = [x for x, y in m.vertices if y <= bot + 0.02]
+            return sum(f) / len(f)
+        return rx("leg_r") - rx("leg_l")
+
+    gap0 = rest_gap()
+    # both ping-pong extremes: (+LA,-RA) leans one way, (-LA,+RA) the other
+    for flip in (1.0, -1.0):
+        gap = foot_x("leg_r", flip) - foot_x("leg_l", flip)
+        assert gap > 0, f"feet crossed at the sway pose (flip={flip:+.0f})"          # never an X
+        assert gap > 0.5 * gap0, "the sway narrowed the stance toward a cross"        # gap preserved
+
+
 def test_a_shoe_rides_the_leg_it_sits_under():
     """The second half of the leg-disconnect: a shoe is a separate part, so leg articulation used to
     move the leg and leave the shoe on the floor. A part at a limb's distal end now moves with it."""

@@ -122,6 +122,13 @@ _DRIVES: dict[str, Drive] = {
                         bidirectional=False,
                         note="both legs splay outward and back (never through the crossing pose) — "
                              "proves the legs were cut at the crotch seam"),
+    # The natural counterpart to the splay diagnostic: a weight-shift. Opposite param signs move the two
+    # legs in the *same* screen direction (a lean), so the gap between the feet is preserved and they
+    # can never cross — the failure mode `legs_swing` was reshaped to avoid. Small amplitude: this reads
+    # as a body-language shift, not a stance.
+    "legs_sway": Drive({"ParamLegLA": 0.5, "ParamLegRA": -0.5},
+                       note="a gentle weight-shift — both legs lean together and the skirt hem follows; "
+                            "the feet keep their spacing (parallel motion, never crossing)"),
 
     # --- face -------------------------------------------------------------------------------------
     "talk": Drive({"ParamMouthOpenY": 1.0}, cycles=3, hold=10, settle=20,

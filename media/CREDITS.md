@@ -1,24 +1,14 @@
 # Demo character credits
 
-The characters shown in the demo (`media/demo.mp4` / the grid) come from three sources.
+All 16 characters shown in the demo (`media/demo.mp4` and the README gallery) are **AI-generated with
+GPT Image 2** and auto-rigged by image2live2d. They are owned output — no third-party rights, no
+attribution required:
 
-## AI-generated (no third-party rights)
-Generated with GPT Image 2 and rigged by image2live2d — no attribution required:
-`gothloli`, `mage`, `mecha`, `kimono`, `catboy`, `idol`, `ojou`, `streetwear`, `magicalgirl`,
-`prince`, and the original set (`catgirl`, `twintails`, `lavendergown`, `silverdress`, `male`,
-`blondedrills`).
-
-## Creative Commons (attribution required)
-These are real third-party illustrations, included to show the pipeline works on outside art.
-Each is used unmodified as *input*; the rigged/animated renders are derivative works and carry the
-same share-alike license.
-
-| Character | Title | Author | License | Source |
-|---|---|---|---|---|
-| `animepedia_mascot` | Animepedia Mascot | Kasuga39 | CC BY-SA 3.0 | https://commons.wikimedia.org/wiki/File:Animepedia_Mascot_by_Kasuga39.jpg |
-| `wikispecies` | Wikispecies-Tan | User:痛 | CC BY-SA 4.0 | https://commons.wikimedia.org/wiki/File:Wikispecies-Tan.png |
+`twintails`, `gothloli`, `catgirl`, `mage`, `mecha`, `kimono`, `catboy`, `idol`, `ojou`, `magicalgirl`,
+`prince`, `streetwear`, `lavendergown`, `silverdress`, `male`, `blondedrills`.
 
 ## Not shown / evaluation only
-The CC0 visual-novel sprites used for hard-case QA (`vn_green`, `vn_male`, `vn_pink`) are from
-OpenGameArt's "Visual Novel Character Sprite" pack (CC0, public domain) and are **not** part of the
-published demo grid. https://opengameart.org/content/visual-novel-character-sprite
+For hard-case QA we also ran some real third-party art through the pipeline (visual-novel CC0 sprites
+and a few CC-BY-SA community mascots). None are part of the published demo — See-through dropped
+garments on the complex ones, and the mono-tone sprites decomposed poorly, so they were cut. They live
+only as local test inputs and are not redistributed here.

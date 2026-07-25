@@ -74,6 +74,7 @@ from .zorder import (
     BROWS,
     FACE_FEATURES,
     normalize_face_zorder,
+    normalize_leg_zorder,
 )
 
 __all__ = [
@@ -127,6 +128,7 @@ __all__ = [
     "FACE_FEATURES",
     "BROWS",
     "normalize_face_zorder",
+    "normalize_leg_zorder",
     "reassign_arm_mislabeled_as_leg",
     "split_bundled_pairs",
     "split_fused_legs",

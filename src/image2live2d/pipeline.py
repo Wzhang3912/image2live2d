@@ -17,6 +17,7 @@ from .core.landmark import Landmarks
 from .core.rig import author_rig, select_template
 from .core.structure import (
     normalize_face_zorder,
+    normalize_leg_zorder,
     reassign_arm_mislabeled_as_leg,
     split_bundled_pairs,
     split_fused_legs,
@@ -70,6 +71,7 @@ def prepare_meshes(stack: LayerStack):
     split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
     _lift_occluded_accessories(stack, meshes)
     normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
+    normalize_leg_zorder(stack, meshes)      # a leg cut at the hemline shouldn't paint over the skirt
     return meshes
 
 

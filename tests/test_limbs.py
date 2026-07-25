@@ -273,7 +273,8 @@ def test_legs_sway_moves_the_feet_in_parallel_and_never_crosses():
 
     def rest_gap() -> float:
         def rx(pid):
-            m = mesh_by[pid]; bot = min(y for _, y in m.vertices)
+            m = mesh_by[pid]
+            bot = min(y for _, y in m.vertices)
             f = [x for x, y in m.vertices if y <= bot + 0.02]
             return sum(f) / len(f)
         return rx("leg_r") - rx("leg_l")

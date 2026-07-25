@@ -24,10 +24,10 @@
 </p>
 
 <p align="center">
-  <a href="media/demo.mp4"><img src="media/demo.gif" alt="image2live2d: one illustration → auto-decompose → auto-rig → live puppet, then the same pipeline across eighteen character styles" width="820"></a>
+  <a href="media/demo.mp4"><img src="media/demo.gif" alt="image2live2d: prompt an image model → auto-decompose → auto-rig → live puppet, then the same pipeline across sixteen character styles" width="820"></a>
 </p>
 
-<p align="center"><i>One illustration → auto-decompose → auto-rig → live puppet — then the same pipeline across eighteen wildly different styles. &nbsp;<a href="media/demo.mp4">▶ Full-quality MP4</a></i></p>
+<p align="center"><i>Prompt an image model → auto-decompose → auto-rig → live puppet — then the same pipeline across sixteen different styles. &nbsp;<a href="media/demo.mp4">▶ Full-quality MP4</a></i></p>
 
 ---
 
@@ -108,41 +108,38 @@ drive all backends. Out of the box a generated rig animates:
 The pipeline also self-diagnoses: a per-character **capability report** tells you honestly what a given
 puppet can and can't do, and QA flags implausible geometry (e.g. an off-centre mouth on a ¾ view).
 
-### …on any character, any style
+### …across a range of styles
 
-Eighteen characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth
+Sixteen characters, one pipeline — each auto-rigged and idling (blink · head-turn · hair/cloth
 physics), straight from a single illustration. Gothic and schoolgirl anime, a fantasy mage and a sci-fi
-mecha, kimono and ornate gowns, an idol and a magical girl, casual streetwear, male characters — and a
-CC-licensed community mascot, to show it isn't tuned to our own art:
+mecha, kimono and ornate gowns, an idol and a magical girl, casual streetwear, and male characters:
 
 <table align="center">
   <tr>
-    <td><img src="media/cells/twintails.gif"         width="150" alt="twintails — schoolgirl"></td>
-    <td><img src="media/cells/gothloli.gif"          width="150" alt="gothloli — gothic lolita"></td>
-    <td><img src="media/cells/catgirl.gif"           width="150" alt="catgirl — gothic anime"></td>
-    <td><img src="media/cells/mage.gif"              width="150" alt="mage — fantasy mage"></td>
-    <td><img src="media/cells/mecha.gif"             width="150" alt="mecha — sci-fi"></td>
-    <td><img src="media/cells/kimono.gif"            width="150" alt="kimono — traditional"></td>
+    <td><img src="media/cells/twintails.gif"    width="190" alt="twintails — schoolgirl"></td>
+    <td><img src="media/cells/gothloli.gif"     width="190" alt="gothloli — gothic lolita"></td>
+    <td><img src="media/cells/catgirl.gif"      width="190" alt="catgirl — gothic anime"></td>
+    <td><img src="media/cells/mage.gif"         width="190" alt="mage — fantasy mage"></td>
   </tr>
   <tr>
-    <td><img src="media/cells/catboy.gif"            width="150" alt="catboy — cat-boy"></td>
-    <td><img src="media/cells/idol.gif"              width="150" alt="idol — stage idol"></td>
-    <td><img src="media/cells/ojou.gif"              width="150" alt="ojou — ornate gown"></td>
-    <td><img src="media/cells/magicalgirl.gif"       width="150" alt="magicalgirl — magical girl"></td>
-    <td><img src="media/cells/prince.gif"            width="150" alt="prince — royal"></td>
-    <td><img src="media/cells/streetwear.gif"        width="150" alt="streetwear — casual"></td>
+    <td><img src="media/cells/mecha.gif"        width="190" alt="mecha — sci-fi"></td>
+    <td><img src="media/cells/kimono.gif"       width="190" alt="kimono — traditional"></td>
+    <td><img src="media/cells/catboy.gif"       width="190" alt="catboy — cat-boy"></td>
+    <td><img src="media/cells/idol.gif"         width="190" alt="idol — stage idol"></td>
   </tr>
   <tr>
-    <td><img src="media/cells/lavendergown.gif"      width="150" alt="lavendergown — ornate gown"></td>
-    <td><img src="media/cells/silverdress.gif"       width="150" alt="silverdress — minimalist"></td>
-    <td><img src="media/cells/male.gif"              width="150" alt="male — casual"></td>
-    <td><img src="media/cells/blondedrills.gif"      width="150" alt="blondedrills — drill-hair"></td>
-    <td><img src="media/cells/animepedia_mascot.gif" width="150" alt="animepedia_mascot — retro mascot (CC BY-SA)"></td>
-    <td><img src="media/cells/wikispecies.gif"       width="150" alt="wikispecies — naturalist maid (CC BY-SA)"></td>
+    <td><img src="media/cells/ojou.gif"         width="190" alt="ojou — ornate gown"></td>
+    <td><img src="media/cells/magicalgirl.gif"  width="190" alt="magicalgirl — magical girl"></td>
+    <td><img src="media/cells/prince.gif"       width="190" alt="prince — royal"></td>
+    <td><img src="media/cells/streetwear.gif"   width="190" alt="streetwear — casual"></td>
+  </tr>
+  <tr>
+    <td><img src="media/cells/lavendergown.gif" width="190" alt="lavendergown — ornate gown"></td>
+    <td><img src="media/cells/silverdress.gif"  width="190" alt="silverdress — minimalist"></td>
+    <td><img src="media/cells/male.gif"         width="190" alt="male — casual"></td>
+    <td><img src="media/cells/blondedrills.gif" width="190" alt="blondedrills — drill-hair"></td>
   </tr>
 </table>
-
-<sub align="center">CC-licensed inputs (animepedia_mascot, wikispecies) credited in <a href="media/CREDITS.md">media/CREDITS.md</a>; the rest are AI-generated.</sub>
 
 ## Input
 

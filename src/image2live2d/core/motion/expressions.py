@@ -26,19 +26,22 @@ _HOLD_FRAMES = 24   # clip length — the pose is reached at _RAMP_FRAMES and he
 # *intended* pose; a lane is only authored for params present on the character, and every value is
 # clamped to the parameter's own range, so these read as "as expressive as this rig allows".
 # Brow convention (ParamBrow*Y): +1 = raised, -1 = lowered/furrowed. Eye open: 1 = wide, 0 = shut.
+# Eyes deliberately stay OPEN for every held expression except surprise (which widens them). Driving
+# ParamEyeOpen toward closed for smile/sad/angry read as a *blink*, not emotion: ParamEyeOpen is the
+# blink axis, and with no happy-/sad-eye art to swap in, lowering it just squashes the open eye toward
+# the sleepy lash line — and because the clip eases in (and a showcase loops it) the eyes visibly
+# open→narrow→open, which looks like blinking. So emotion here comes from the MOUTH + BROWS only; a
+# rig that later gains an eye-*form* parameter can layer a genuine squint on top.
 _EXPRESSIONS: dict[str, dict[str, float]] = {
-    # corners up, eyes softened to a happy squint, brows a touch up
-    "smile": {"ParamMouthForm": 1.0, "ParamEyeLOpen": 0.6, "ParamEyeROpen": 0.6,
-              "ParamBrowLY": 0.3, "ParamBrowRY": 0.3},
+    # corners up, brows a touch up
+    "smile": {"ParamMouthForm": 1.0, "ParamBrowLY": 0.4, "ParamBrowRY": 0.4},
     # mouth agape, eyes wide, brows shot up
     "surprise": {"ParamMouthOpenY": 0.7, "ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0,
                  "ParamBrowLY": 1.0, "ParamBrowRY": 1.0},
-    # corners down, brows raised (worried inner-up read), eyes lowered
-    "sad": {"ParamMouthForm": -1.0, "ParamEyeLOpen": 0.7, "ParamEyeROpen": 0.7,
-            "ParamBrowLY": 0.3, "ParamBrowRY": 0.3},
-    # slight frown, brows furrowed down, eyes narrowed — the brow direction is what reads as anger vs sad
-    "angry": {"ParamMouthForm": -0.6, "ParamEyeLOpen": 0.9, "ParamEyeROpen": 0.9,
-              "ParamBrowLY": -1.0, "ParamBrowRY": -1.0},
+    # corners down, brows raised (worried inner-up read)
+    "sad": {"ParamMouthForm": -1.0, "ParamBrowLY": 0.5, "ParamBrowRY": 0.5},
+    # frown + furrowed brows — the brow direction is what reads as anger vs sad
+    "angry": {"ParamMouthForm": -0.7, "ParamBrowLY": -1.0, "ParamBrowRY": -1.0},
 }
 
 EXPRESSION_NAMES: tuple[str, ...] = tuple(_EXPRESSIONS)

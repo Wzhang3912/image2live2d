@@ -5,6 +5,7 @@ the rig authors a whole-limb swing + a gap-free lower-segment bend about the elb
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import pytest
@@ -311,6 +312,41 @@ def test_a_shoe_rides_the_leg_it_sits_under():
     assert "shoe_l" in moved       # the shoe swings with its leg
     assert "shoe_r" not in moved   # the other leg's shoe does not
     assert "skirt" not in moved    # and the skirt, far above the feet, is untouched
+
+
+def test_a_lower_body_skirt_does_not_ride_an_arm():
+    """The magicalgirl lower-body detachment: for a standing character the hands hang at skirt height,
+    and the arm's *silhouette* bbox balloons when the arm layer absorbs a wide accessory (angel wings).
+    The old rider test used that whole bbox column, so a skirt tier — top edge at hanging-hand height,
+    centred on the body — passed as a "wrist cuff" and rigidly rotated with the arm, tearing the skirt
+    off the legs. The rider test now keys off the wrist point, not the inflated bbox, so the skirt (which
+    billows a limb-width away from the wrist) is neither a rider nor more than a faint edge-follow: its
+    hem, far from the arm, must not move under an arm swing."""
+    parts = [
+        ("arm_l", R.arm_l, (0.58, 0.45, 0.66, 0.75)),   # a narrow arm hanging at the side, wrist ~0.45
+        ("wing", R.arm_l, (0.30, 0.68, 0.66, 0.78)),    # a wide accessory absorbed into the arm layer
+        ("skirt", R.clothing, (0.34, 0.20, 0.60, 0.46)),  # wide tier, top at wrist height, centred
+    ]
+    layers, meshes, mesh_by = [], [], {}
+    for i, (pid, role, rect) in enumerate(parts):
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=i * 10, width=64, height=64))
+        m = grid_mesh(pid, rect, lambda u, v: 255, grid=4)
+        meshes.append(m)
+        mesh_by[pid] = m
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+
+    auth = author_rig(stack, meshes, select_template(stack), landmarks=None)
+    swing = next(p for p in auth.parameters if p.id == "ParamArmLA")
+    kf = next(k for k in swing.keyforms if k.value == swing.max)
+    skirt = mesh_by["skirt"]
+    offs = kf.mesh_offsets.get("skirt", [(0.0, 0.0)] * len(skirt.vertices))
+    hem_bot = min(y for _, y in skirt.vertices)
+    hem = [math.hypot(dx, dy) for (dx, dy), (_, y) in zip(offs, skirt.vertices)
+           if y <= hem_bot + 0.02]
+    assert max(hem) < 0.01, f"the skirt hem rode the arm swing (max {max(hem):.3f}) — lower-body tear"
+    arm_moved = any(dx or dy for dx, dy in kf.mesh_offsets.get("arm_l", []))
+    assert arm_moved, "sanity: the arm itself should swing"
 
 
 def test_limbs_authored_from_mesh_without_landmark_joints():

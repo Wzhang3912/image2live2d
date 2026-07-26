@@ -383,6 +383,11 @@ def author_rig(
     # the limb by _limb_follow so the sleeve rotates with the arm without splitting the clothing layer.
     clothing_candidates = [(layer.id, mesh_by_part[layer.id]) for layer in stack.layers
                            if layer.id in mesh_by_part and layer.semantic_role == SemanticRole.clothing]
+    # Draw order per part — used to keep a garment drawn BEHIND a limb from riding it. A sleeve the arm
+    # is inside is drawn over/with the arm; a cape or back-dress panel hangs from the shoulders behind
+    # the arm, so an arm swing must not drag it (catgirl's cape rode the arm this way). See the follow
+    # filter below.
+    _draw = {layer.id: layer.draw_order for layer in stack.layers}
     # The character's horizontal midline — the reference for "outward". A limb rotates the SAME absolute
     # direction for a given param sign, so without mirroring, driving both arms to +max lifts one and
     # drops the other: you literally cannot raise both arms at once. Negating the rotation for the limb
@@ -419,9 +424,14 @@ def author_rig(
         joint, elbow, end, riders = _joints[role]
         # A garment overlapping the limb (a jacket sleeve) rides its SWING with a tapered weight, so it
         # bends off the torso instead of the bare arm tearing out of a static sleeve. Riders (of any
-        # limb) are excluded — they already move rigidly with the limb they sit on.
-        follow = _limb_follow([m for _, m in limb], joint, end, _mid_x,
-                              [(pid, m) for pid, m in clothing_candidates if pid not in _all_rider_ids])
+        # limb) are excluded — they already move rigidly with the limb they sit on. Garments drawn BEHIND
+        # the limb are excluded too: a sleeve enclosing the arm is drawn over/with it, whereas a cape or
+        # back panel sits behind the arm and hangs from the shoulders, so an arm swing must not drag it.
+        limb_z = min((_draw.get(pid, 0) for pid, _ in limb), default=0)
+        follow = _limb_follow(
+            [m for _, m in limb], joint, end, _mid_x,
+            [(pid, m) for pid, m in clothing_candidates
+             if pid not in _all_rider_ids and _draw.get(pid, 0) >= limb_z])
         limb = limb + riders
         side = 1.0 if joint[0] >= _mid_x else -1.0    # +param lifts/splays OUTWARD on both sides
         params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side, follow=follow))  # swing

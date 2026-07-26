@@ -145,7 +145,11 @@ _ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways s
 _GARMENT_SWAY = 0.20  # cape/sleeve dangle: between an ornament and a skirt hem (a bigger sheet of cloth)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
 _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
-_BROW_FRAC = 0.4      # brow shift as fraction of brow bbox height at +-1
+# Brow travel is anchored to the brow->eye GAP (not the thin brow's own height) and is ASYMMETRIC: the
+# raise is generous (open forehead above) so it reads; the lower is < the gap so an angry brow never
+# crosses the eye. See _brow. A fraction of a thin brow's thickness barely moved it before (#8).
+_BROW_UP = 1.6        # raise (ParamBrow*Y +1) as a multiple of the brow->eye gap
+_BROW_DOWN = 0.6      # lower (ParamBrow*Y -1) as a fraction of the gap (< 1 = stays clear of the eye)
 _MOUTH_OPEN = 0.7     # lower-lip drop as fraction of mouth bbox height at 1
 _UPPER_LIP_FRAC = 0.35  # upper-lip *rise* on open as a fraction of the lower-lip drop — the jaw does
 #                         most of the opening, but a small upper-lip lift turns a jaw-slide into a
@@ -307,12 +311,14 @@ def author_rig(
         params.append(_eyeball("ParamEyeBallY", pupils, axis="y", travel=travel_y))
 
     # --- Brow raise -----------------------------------------------------------------------------
+    eye_grp = members(SemanticRole.eye_l, SemanticRole.eye_r)
+    eye_top = max((y for _, m in eye_grp for _, y in m.vertices), default=None)  # y-up: top of the eye
     brow_l = members(SemanticRole.eyebrow_l)
     if brow_l:
-        params.append(_brow("ParamBrowLY", brow_l))
+        params.append(_brow("ParamBrowLY", brow_l, eye_top))
     brow_r = members(SemanticRole.eyebrow_r)
     if brow_r:
-        params.append(_brow("ParamBrowRY", brow_r))
+        params.append(_brow("ParamBrowRY", brow_r, eye_top))
 
     # --- Hair sway (physics OUTPUT params; the physics rig drives these) ------------------------
     # P2: one param per hair PART (strand), not one per role — so twin-tails / a ponytail + fringe
@@ -972,13 +978,19 @@ def _eyeball(
     return _tri(param_id, at)
 
 
-def _brow(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
+def _brow(param_id: str, group: list[tuple[str, Mesh]], eye_top: float | None = None) -> Parameter:
+    """Raise/lower the brow (ParamBrow*Y). Travel is anchored to the brow->eye GAP, not the brow's own
+    (thin) height: a fraction of a thin brow's thickness barely separated it from its rest position, so
+    the raise did not read (#8). ``eye_top`` (the top of the eye, y-up) bounds the gap, and _BROW_FRAC is
+    < 1 of it, so a lowered (angry) brow never crosses into the eye. Falls back to the brow's own height
+    when the eye is absent (a browed portrait with no eyes)."""
+    gy0 = min(y for _, m in group for _, y in m.vertices)   # brow bottom (nearest the eye), y-up
+    gy1 = max(y for _, m in group for _, y in m.vertices)
+    gap = max((gy0 - eye_top) if eye_top is not None else (gy1 - gy0), 1e-6)
+
     def at(sign: float) -> dict[str, list[Vec2]]:
-        offs: dict[str, list[Vec2]] = {}
-        for pid, m in group:
-            _, y0, _, y1 = _bbox(m.vertices)
-            offs[pid] = _translate(m, 0.0, sign * (y1 - y0) * _BROW_FRAC)
-        return offs
+        dy = sign * gap * (_BROW_UP if sign > 0 else _BROW_DOWN)   # generous up, eye-safe down
+        return {pid: _translate(m, 0.0, dy) for pid, m in group}
 
     return _tri(param_id, at)
 

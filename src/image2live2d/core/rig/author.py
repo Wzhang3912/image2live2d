@@ -109,6 +109,7 @@ _ANGLE_Z_DEG = 12.0   # head tilt degrees at its extreme
 _BODY_TURN_X = math.radians(8.0)  # body sway at its extreme (range +-10)
 _BODY_TURN_Y = math.radians(6.0)
 _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
+_BODY_PIVOT_FRAC = 0.55  # hip pivot this fraction down the body (shoulders->feet); the body leans about it
 # Head turn/tilt at the extreme, for the .cmo3 warp deformer only (moc3/nijilive synthesise their own).
 # Magnitudes match the moc3 head-warp rotation (HEAD_YAW/PITCH/ROLL/NECK_DROP) so the editable project
 # turns like the runtime files.
@@ -362,8 +363,13 @@ def author_rig(
         body_meshes = [m for _, m in body]
         bcenter = _union_center(body_meshes)
         bbox = _union_bbox(body_meshes)
-        params.append(_head_turn("ParamBodyAngleX", body, bcenter, bbox, axis="x", amax=_BODY_TURN_X))
-        params.append(_head_turn("ParamBodyAngleY", body, bcenter, bbox, axis="y", amax=_BODY_TURN_Y))
+        # The head rides the body lean (riders): it translates with the shoulders so the whole figure
+        # sways/bows as one and the neck never tears. Hair goes with the head. Empty for a bare portrait.
+        head_riders = head or None
+        params.append(_head_turn("ParamBodyAngleX", body, bcenter, bbox, axis="x", amax=_BODY_TURN_X,
+                                 riders=head_riders))
+        params.append(_head_turn("ParamBodyAngleY", body, bcenter, bbox, axis="y", amax=_BODY_TURN_Y,
+                                 riders=head_riders))
         params.append(_rotation("ParamBodyAngleZ", body, bcenter, deg=_BODY_Z_DEG))
 
     # --- Limb articulation (arms/legs swing about their joint) -----------------------------------
@@ -661,78 +667,66 @@ def _two_pose(
 
 def _head_turn(
     param_id: str,
-    head: list[tuple[str, Mesh]],
+    group: list[tuple[str, Mesh]],
     center: Vec2,
     bbox: tuple[float, float, float, float],
     *,
     axis: str,
     amax: float,
-    neck: list[tuple[str, Mesh]] | None = None,
+    riders: list[tuple[str, Mesh]] | None = None,
+    ref: Vec2 | None = None,
 ) -> Parameter:
-    """A single shared pseudo-3D rotation, baked coherently into every vertex of the group.
+    """Body sway / bow (ParamBodyAngleX/Y) as a whole-body LEAN, plus the head RIDING it.
 
-    The group is modelled as a sphere centred on it; each vertex's signed offset from centre on the
-    turn axis maps to an angle on that sphere, rotated by ``amax`` at the extreme. Vertices near the
-    axis shift most and the receding edge foreshortens — the look a warp deformer gives, but
-    backend-neutral. One shared centre/radius keeps parts coherent. Used for head (ParamAngleX/Y)
-    and body (ParamBodyAngleX/Y).
+    The body is rotated rigidly about a hip pivot in pseudo-3D: each vertex is lifted to a DEPTH from a
+    horizontal cylinder over the body width (front-centre most forward) and rotated about the pivot —
+    yaw about the vertical axis (sway), pitch about the horizontal axis (bow) — then projected. So the
+    torso tips as one unit about the hips, instead of the old sphere-squash that scaled it in place
+    (which read as pixels sliding up/down rather than a body leaning).
 
-    ``neck`` parts (optional) get a **tapered follow-through**: each neck vertex shifts by the head's
-    displacement evaluated at the chin (``cx``, bbox-bottom), scaled by a vertical weight that is 1 at
-    the neck top (so it stays joined to the head) and 0 at the shoulders (so the body still anchors
-    it). Closes the head/neck seam on strong turns without detaching the shoulders. The reference is
-    taken on-sphere (at the chin) so it is exactly zero at rest and never clamps.
-    """
-    cx, cy = center
+    ``riders`` (the head group) translate RIGIDLY by the lean's displacement evaluated at ``ref`` (the
+    neck base, default the body's top-centre). This makes the head move WITH the shoulders rather than
+    staying pinned while the body swings out from under it. The neck belongs to ``group`` and sits at
+    ``ref``, so it gets the same displacement as the head at its top and the body lean at its base — it
+    stays joined to both, with no stretch or tear. Zero at rest (a=0 -> sin=0). Body only; the head's
+    OWN turn is the warp path (see :func:`_head_turn_warp` / moc3_emit)."""
+    cx = center[0]
     x0, y0, x1, y1 = bbox
-    # Radius must contain every vertex *relative to the pivot center*, so no vertex falls outside the
-    # sphere and gets clamped (which would yank far parts violently). When center is the bbox midpoint
-    # this equals the half-extent; when the pivot is offset (e.g. a landmark face-oval center that sits
-    # away from the parts' midline), the far side governs — keeping the warp bounded and artifact-free.
-    if axis == "x":
-        radius = max(cx - x0, x1 - cx, 1e-6)
-    else:
-        radius = max(cy - y0, y1 - cy, 1e-6)
+    # Hip pivot: down the body from the shoulders (IRR is y-DOWN, so shoulders sit at y0, feet at y1).
+    # The body leans about it — shoulders/head (far from it) move most, hips (at it) least.
+    pivot_x, pivot_y = cx, y0 + _BODY_PIVOT_FRAC * (y1 - y0)
+    rx = max(x1 - cx, cx - x0, 1e-6)          # body half-WIDTH  -> horizontal-cylinder depth radius
+    cy = (y0 + y1) / 2.0
+    ry = max(y1 - cy, cy - y0, 1e-6)          # body half-HEIGHT -> depth vertical window
+    vfade = 0.5 * ry
+    rref = ref if ref is not None else (cx, y0)   # head/neck attachment: the body's top-centre
 
-    if neck:
-        ny0 = min(y for _, m in neck for _, y in m.vertices)
-        ny1 = max(y for _, m in neck for _, y in m.vertices)
-        nspan = max(ny1 - ny0, 1e-6)
+    def _depth(x: float, y: float) -> float:
+        hx = (x - cx) / rx
+        z = rx * math.sqrt(max(0.0, 1.0 - hx * hx))
+        d = abs(y - cy)
+        if d > ry:
+            z *= max(0.0, 1.0 - (d - ry) / vfade) if vfade else 0.0
+        return z
 
     def at(sign: float) -> dict[str, list[Vec2]]:
         a = sign * amax
-        # Anchor the pivot: a bare sphere warp shifts the centre itself by radius·sin(a), so the whole
-        # head *slides* — and an asymmetric silhouette or floor-length hair inflates `radius`, sliding
-        # it right off the body. Subtracting the centre's own shift makes the head **rotate in place**
-        # (centre stays put; features foreshorten around it), which is both more natural and removes
-        # the slide that scaled with radius. Zero at rest (a=0 -> sin=0).
-        center_shift = radius * math.sin(a)
-        offs: dict[str, list[Vec2]] = {}
-        for pid, m in head:
-            cell: list[Vec2] = []
-            for x, y in m.vertices:
-                if axis == "x":
-                    phi = math.asin(_clamp((x - cx) / radius, -1.0, 1.0))
-                    cell.append((cx + radius * math.sin(phi + a) - x - center_shift, 0.0))
-                else:
-                    psi = math.asin(_clamp((y - cy) / radius, -1.0, 1.0))
-                    cell.append((0.0, cy + radius * math.sin(psi + a) - y - center_shift))
-            offs[pid] = cell
-        if neck:
+        ca, sa = math.cos(a), math.sin(a)
+
+        def delta(x: float, y: float) -> Vec2:
+            z = _depth(x, y)
             if axis == "x":
-                ref = 0.0                                                    # pivot anchored: no x slide
-            else:
-                psi0 = math.asin(_clamp((y0 - cy) / radius, -1.0, 1.0))
-                ref = cy + radius * math.sin(psi0 + a) - y0 - center_shift   # residual chin dy
-            for pid, m in neck:
-                cell = []
-                for x, y in m.vertices:
-                    w = _clamp((y - ny0) / nspan, 0.0, 1.0)                  # 0 shoulders -> 1 top
-                    cell.append((ref * w, 0.0) if axis == "x" else (0.0, ref * w))
-                offs[pid] = cell
-        # Bound runaway: a head sphere sized to a huge group (long hair) or skewed by an asymmetric
-        # silhouette can fling vertices off. Uniform-scale the whole warp so its largest shift is
-        # <= _TURN_CAP, preserving the warp's shape (relative motion) while capping its magnitude.
+                u = x - pivot_x
+                return (u * ca + z * sa - u, 0.0)   # sway: rotate about the vertical axis thru the hip
+            v = y - pivot_y
+            return (0.0, v * ca + z * sa - v)       # bow:  rotate about the horizontal axis thru the hip
+
+        offs: dict[str, list[Vec2]] = {pid: [delta(x, y) for x, y in m.vertices] for pid, m in group}
+        if riders:
+            rdx, rdy = delta(*rref)                 # rigid displacement of the neck base -> the head rides
+            for pid, m in riders:
+                offs[pid] = [(rdx, rdy)] * len(m.vertices)
+        # Bound runaway (an asymmetric or huge silhouette): uniform-scale so the largest shift <= _TURN_CAP.
         mx = max((math.hypot(dx, dy) for cell in offs.values() for dx, dy in cell), default=0.0)
         if mx > _TURN_CAP:
             s = _TURN_CAP / mx

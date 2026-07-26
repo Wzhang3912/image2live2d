@@ -389,27 +389,39 @@ def author_rig(
     # on the far side of the midline makes +param mean "lift/splay OUTWARD" on both sides — a body that
     # moves symmetrically, the way a real one does.
     _mid_x = _union_center(list(mesh_by_part.values()))[0] if mesh_by_part else 0.5
-    for role, swing_id, bend_id, swing_deg, bend_deg in (
+    _limb_spec = (
         (SemanticRole.arm_l, "ParamArmLA", "ParamArmLB", _ARM_DEG, _ELBOW_DEG),
         (SemanticRole.arm_r, "ParamArmRA", "ParamArmRB", _ARM_DEG, _ELBOW_DEG),
         (SemanticRole.leg_l, "ParamLegLA", "ParamLegLB", _LEG_DEG, _KNEE_DEG),
         (SemanticRole.leg_r, "ParamLegRA", "ParamLegRB", _LEG_DEG, _KNEE_DEG),
-    ):
+    )
+    # A limb has to carry whatever rides its distal end — the shoe at a foot, a cuff at a wrist —
+    # or articulation moves the leg and leaves the shoe standing on the floor (the second half of
+    # the leg-disconnect the render showed). Those parts are separate layers (footwear arrives as its
+    # own "clothing"), so we find them by geometry: sitting at/below the limb's far end, beside the
+    # ankle. They then swing and bend with the limb like the rest of it. Compute them for every limb
+    # up front: a part that rides one limb rigidly must never also *follow* another (a shoe under one
+    # leg would otherwise get swept up by the other leg's sleeve-follow reach — the two feet are close).
+    _joints: dict = {}
+    _all_rider_ids: set = set()
+    for role, *_ in _limb_spec:
         limb = members(role)
         if not limb:
             continue
         joint, elbow, end = _limb_joints([m for _, m in limb])               # joint from the limb only
-        # A limb has to carry whatever rides its distal end — the shoe at a foot, a cuff at a wrist —
-        # or articulation moves the leg and leaves the shoe standing on the floor (the second half of
-        # the leg-disconnect the render showed). Those parts are separate layers (footwear arrives as
-        # its own "clothing"), so we find them by geometry: sitting at/below the limb's far end, within
-        # its lateral span. They then swing and bend with the limb like the rest of it.
-        riders = _limb_riders([m for _, m in limb], all_limb_candidates)
-        rider_ids = {pid for pid, _ in riders}
+        riders = _limb_riders([m for _, m in limb], end, all_limb_candidates)
+        _joints[role] = (joint, elbow, end, riders)
+        _all_rider_ids |= {pid for pid, _ in riders}
+    for role, swing_id, bend_id, swing_deg, bend_deg in _limb_spec:
+        limb = members(role)
+        if not limb:
+            continue
+        joint, elbow, end, riders = _joints[role]
         # A garment overlapping the limb (a jacket sleeve) rides its SWING with a tapered weight, so it
-        # bends off the torso instead of the bare arm tearing out of a static sleeve.
+        # bends off the torso instead of the bare arm tearing out of a static sleeve. Riders (of any
+        # limb) are excluded — they already move rigidly with the limb they sit on.
         follow = _limb_follow([m for _, m in limb], joint, end, _mid_x,
-                              [(pid, m) for pid, m in clothing_candidates if pid not in rider_ids])
+                              [(pid, m) for pid, m in clothing_candidates if pid not in _all_rider_ids])
         limb = limb + riders
         side = 1.0 if joint[0] >= _mid_x else -1.0    # +param lifts/splays OUTWARD on both sides
         params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side, follow=follow))  # swing
@@ -1087,23 +1099,39 @@ def _limb_joints(meshes: list[Mesh]) -> tuple[Vec2, Vec2, Vec2]:
 # body-lengths up: the shoe is below the arm, but nowhere near the wrist.
 _RIDER_END_FRAC = 0.25      # how far below the limb's end a rider's top may start
 _RIDER_OVERLAP = 0.15       # how far it may reach up into the limb (overlap at the ankle)
+_RIDER_X_TOL = 1.5          # a rider's centre must sit within this ×the limb's end half-width of the
+#                             ankle/wrist — keyed to the END, not the limb's whole diagonal bbox.
 
 
 def _limb_riders(
-    limb_meshes: list[Mesh], candidates: list[tuple[str, Mesh]],
+    limb_meshes: list[Mesh], end: Vec2, candidates: list[tuple[str, Mesh]],
 ) -> list[tuple[str, Mesh]]:
     """The parts that hang off a limb's far end and must move with it (a shoe at a foot, a cuff at a
     wrist). Chosen purely by geometry so it doesn't depend on a footwear role the decomposer may not
-    label: the part's top sits at the limb's distal end, laterally within the limb's own column."""
+    label: the part's top sits at the limb's distal end, laterally near the ankle/wrist.
+
+    The lateral test keys off the END point (the medial ankle/wrist), not the limb's whole bbox
+    column. An arm hangs down-and-outward, so its bbox is a wide diagonal band; worse, the limb can
+    absorb a broad accessory (angel wings) that balloons the bbox to ~40% of the canvas. Testing
+    against that column let a lower-body skirt tier — whose top edge happens to sit at hanging-hand
+    height — pass as a "wrist cuff" and rigidly rotate with the arm, tearing the skirt off the legs
+    (the magicalgirl detachment). A real cuff sits right at the wrist; keying to the end excludes the
+    skirt, which billows a limb-width or more away from it.
+    """
     lx0, ly0, lx1, ly1 = _union_bbox(limb_meshes)
     h = ly1 - ly0
     hi = ly0 + _RIDER_END_FRAC * h                      # top may start this far below the end...
     lo = ly0 - _RIDER_OVERLAP * h                       # ...up to this far into the limb (the ankle)
+    ex, _ = end
+    # half-width of the limb's own cross-section at the end band — the ankle/wrist thickness
+    end_xs = [x for m in limb_meshes for x, y in m.vertices if abs(y - ly0) <= _JOINT_BAND * h]
+    end_hw = max((max(end_xs) - min(end_xs)) / 2.0, 0.02) if end_xs else max((lx1 - lx0) / 2.0, 0.02)
+    xtol = _RIDER_X_TOL * end_hw
     riders: list[tuple[str, Mesh]] = []
     for pid, m in candidates:
         cx0, cy0, cx1, cy1 = _bbox(m.vertices)
         ccx = (cx0 + cx1) / 2.0
-        if lo <= cy1 <= hi and lx0 <= ccx <= lx1:      # top at the limb's end, and in its column
+        if lo <= cy1 <= hi and abs(ccx - ex) <= xtol:  # top at the limb's end, and beside the ankle
             riders.append((pid, m))
     return riders
 
@@ -1114,8 +1142,10 @@ def _limb_riders(
 # continuous garment mesh bends there instead of tearing off the torso. This is how a jacket sleeve
 # follows its arm without splitting the clothing layer.
 _FOLLOW_SEAM_BAND = 0.35    # taper zone at the joint, as a fraction of the limb's height
-_FOLLOW_X_OUT = 1.1         # widen the limb's column OUTWARD (away from midline) by this ×its width —
+_FOLLOW_X_OUT = 1.1         # flare the reach OUTWARD (away from midline) by this ×the local half-width —
 _FOLLOW_X_IN = 0.15         # a puffy sleeve is wider than the bare arm; the INNER edge stays tight (torso)
+_FOLLOW_HW_FLOOR = 0.18     # min cross-section half-width (×limb width) so a thin wrist keeps a small reach
+_FOLLOW_MIN_W = 0.3         # a vertex counts as "over the limb" only above this weight (drops taper edges)
 
 
 def _limb_follow(
@@ -1123,34 +1153,56 @@ def _limb_follow(
     candidates: list[tuple[str, Mesh]],
 ) -> list[tuple[str, Mesh, list[float]]]:
     """Per-vertex weights so garment parts overlapping a limb ride its swing. Returns
-    ``[(pid, mesh, weights)]`` for parts with meaningful overlap; a torso-only part gets all-zero
-    weights and is dropped."""
+    ``[(pid, mesh, weights)]`` for parts with meaningful overlap; a part that doesn't hug the limb
+    (a torso panel, a lower-body skirt) gets all-zero weights and is dropped.
+
+    The horizontal test is against the limb's OWN cross-section at each height, not a single
+    bbox-wide column. That column was the source of the magicalgirl lower-body tear: for a standing
+    character the hand hangs at skirt height, so the wide column swept up the skirt edge and the arm
+    swing dragged the whole skirt off the legs. A skirt billows far from the narrow wrist axis, so
+    per-height proximity excludes it, while a sleeve cuff (close to the axis) and a puffy sleeve
+    (within the flare of the local width) still ride the arm.
+    """
     lx0, _, lx1, _ = _union_bbox(limb_meshes)
     lw = max(lx1 - lx0, 1e-6)
+    lverts = [v for m in limb_meshes for v in m.vertices]
     jy = joint[1]                                       # shoulder/hip (top, y-up)
     _, ey = end                                         # wrist/ankle (bottom)
     span = max(jy - ey, 1e-6)
     band = max(_FOLLOW_SEAM_BAND * span, 1e-6)
-    # widen the column outward (the sleeve flares away from the body), keep the inner edge tight (torso)
-    if (lx0 + lx1) / 2.0 >= mid_x:                      # limb on the right of the body -> flare right
-        gx0, gx1 = lx0 - _FOLLOW_X_IN * lw, lx1 + _FOLLOW_X_OUT * lw
-    else:
-        gx0, gx1 = lx0 - _FOLLOW_X_OUT * lw, lx1 + _FOLLOW_X_IN * lw
+    outward = 1.0 if (lx0 + lx1) / 2.0 >= mid_x else -1.0   # away from the midline (sleeve flares out)
+    hw_floor = _FOLLOW_HW_FLOOR * lw                    # keep a thin cross-section (a wrist) from zeroing
     ylo, yhi = ey - 0.10 * span, jy + band
+
+    def cross_section(y: float) -> tuple[float, float]:
+        """(centre_x, half_width) of the limb at height ``y`` — its medial axis and local radius."""
+        yc = _clamp(y, ey, jy)
+        xs = [x for x, vy in lverts if abs(vy - yc) <= _JOINT_BAND * span]
+        if not xs:
+            return (lx0 + lx1) / 2.0, lw / 2.0
+        return sum(xs) / len(xs), max((max(xs) - min(xs)) / 2.0, hw_floor)
+
     out: list[tuple[str, Mesh, list[float]]] = []
     for pid, m in candidates:
         weights: list[float] = []
         mw, n = 0.0, 0
         for x, y in m.vertices:
-            if gx0 <= x <= gx1 and ylo <= y <= yhi:
-                w = _clamp((jy - y) / band, 0.0, 1.0)   # 0 at the seam -> 1 over the limb
-            else:
-                w = 0.0
+            if not (ylo <= y <= yhi):
+                weights.append(0.0)
+                continue
+            cx, hw = cross_section(y)
+            # allowed reach: tight toward the torso, flared outward for a puffy sleeve
+            inner, outer = hw * (1.0 + _FOLLOW_X_IN), hw * (1.0 + _FOLLOW_X_OUT)
+            reach = outer if (x - cx) * outward >= 0 else inner
+            dx = abs(x - cx)
+            hf = _clamp(1.0 - (dx - reach) / max(hw, 1e-6), 0.0, 1.0)  # 1 within reach, taper over ~hw
+            vr = _clamp((jy - y) / band, 0.0, 1.0)      # 0 at the seam -> 1 over the limb
+            w = vr * hf
             weights.append(w)
-            if w > 0.05:
-                n += 1
-            mw = max(mw, w)
-        if mw > 0.3 and n >= 3:
+            if w > _FOLLOW_MIN_W:                        # only strongly-followed vertices count toward
+                n += 1                                   # inclusion, so a marginal edge overlap with a
+            mw = max(mw, w)                              # neighbour part (the other leg's shoe) can't
+        if mw > 0.3 and n >= 3:                          # trip the gate via a handful of taper weights
             out.append((pid, m, weights))
     return out
 

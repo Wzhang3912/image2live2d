@@ -395,17 +395,24 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
     _dm = [(p, rig.mesh_for(p.id)) for p in drawn]
     head_ids = head_group_ids(_dm)
     neck_ids = {p.id for p, _ in _dm if p.semantic_role is _SR.neck}
-    # Head turn = pseudo-3D SQUASH + roll ABOUT THE NECK BASE (the nijilive / inochi2d model), NOT a
-    # translation. Yaw squashes the head horizontally, pitch squashes it vertically, roll tilts it — all
-    # about the neck-base pivot, so the head stays ANCHORED at the neck and the neck itself never moves or
-    # stretches. (Translating the head, the old approach, dragged the pinned neck into a rubber stretch.)
-    # Magnitudes match the nijilive head-group rotation (backends/nijilive/puppet.py _HEAD_ROT).
-    HEAD_YAW = 0.52            # radians of pseudo-3D yaw (horizontal squash) at full ParamAngleX
-    HEAD_PITCH = 0.42          # radians of pseudo-3D pitch (vertical squash) at full ParamAngleY
+    # Head turn = a RIGID PSEUDO-3D ROTATION of the whole head about a NECK-BASE pivot (below the jaw).
+    # Each head point is lifted to 3D by a DEPTH recovered from a horizontal cylinder over the face
+    # width — the center column (nose/mouth/CHIN) is most forward, the cheeks/ears edge-on — then the
+    # head is rotated in 3D about the neck pivot for yaw/pitch/roll and orthographically projected.
+    #   • Yaw: the forward center column sweeps by depth·sin(yaw), so the chin/mouth turn WITH the face
+    #     (the old ellipsoid put the chin at a vertical pole with ~0 depth, so it barely moved — #4/#5).
+    #   • Pitch: the head TIPS about the low neck pivot instead of scaling about its own center, so it
+    #     nods as a whole and keeps its apparent size (the old cos-scale-about-face-center pinched the
+    #     face top+bottom inward, reading as a resize — #7).
+    #   • Roll: in-plane rotation about the same neck pivot (unchanged).
+    # The pivot below the jaw means the jaw is above the pivot and swings, while the neck junction near
+    # the pivot barely moves, so the fixed neck below still meets it. Magnitudes match the nijilive
+    # head-group rotation (backends/nijilive/puppet.py _HEAD_ROT).
+    HEAD_YAW = 0.52            # radians of pseudo-3D yaw (horizontal head-turn) at full ParamAngleX
+    HEAD_PITCH = 0.42          # radians of pseudo-3D pitch (nod) at full ParamAngleY
     HEAD_ROLL = 0.35           # radians of in-plane roll at full ParamAngleZ
-    # The head turns as a rigid unit (translate + roll) exactly like the niji runtime. No neck "lift" is
-    # applied: an earlier version raised the head on turn to expose the neck, but that stretched the neck
-    # and shrank the head vs the .inp/niji render, so it's removed — the head stays full size through turns.
+    NECK_DROP = 0.35           # neck pivot sits this fraction of the face HEIGHT below the jaw, so the
+    #                            head rotates about the neck base (jaw swings) rather than about the jaw.
 
     def _norm_frac(pid, val):
         p = pmap.get(pid)
@@ -468,15 +475,21 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
         _hxs = [v[0] for p, m in _dm if p.id in head_ids for v in m.vertices]
         _hys = [v[1] for p, m in _dm if p.id in head_ids for v in m.vertices]
         _pys = _fys if _fys else _hys
+        _jaw = (max(_pys) if _dir > 0 else min(_pys)) if _pys else 0.5    # face bottom, toward the body
+        _fhh = (max(_pys) - min(_pys)) / 2.0 if _pys else (_srad or 0.0)  # face half-HEIGHT
+        # Neck pivot: below the jaw by NECK_DROP of the face height, so the head rotates about the neck
+        # BASE — the jaw sits above it and swings, while the pivot (the neck junction) barely moves so the
+        # fixed neck below still meets the head. Falls back to the head-group centroid x.
         _pivot = (_sx if _sx is not None else (sum(_hxs) / len(_hxs) if _hxs else 0.5),
-                  (max(_pys) if _dir > 0 else min(_pys)) if _pys else 0.5)
-        # Depth model = a VERTICALLY-ELONGATED ellipsoid, not a sphere (RIVAL_HARVEST_BACKLOG T6). A
-        # sphere puts its top/bottom poles inside the face (a face is taller than it is wide), so those
-        # rows get ~0 depth and PITCH pinches them together — a vertical squash, not a nod (measured: top
-        # sweeps +0.057, chin -0.032, opposite ways). Stretching the vertical semi-axis to reach the NECK
-        # makes depth ~constant down each column through the face (a cylinder there → the column nods as a
-        # rigid unit), while the pole still lands at the neck so the neck keeps its ~0-depth anchor.
-        _sry = max(abs(_pivot[1] - _sy), _srad) if _srad is not None else None
+                  _jaw + _dir * NECK_DROP * (2.0 * _fhh))
+        # Depth = a HORIZONTAL CYLINDER over the face WIDTH (x-radius _srad), held flat down the whole face
+        # height by a vertical WINDOW (_fhh, with a soft fade band _vfade beyond). So the center column
+        # (nose/mouth/chin) is fully forward at EVERY height — it sweeps under yaw and nods under pitch as
+        # a rigid unit — while long hair and the edges beyond the face get ~0 depth (they only ride the
+        # rotation, never gain a spurious sweep). Replaces the old elongated ellipsoid, whose bottom pole
+        # zeroed the chin's depth (so it never turned — #4/#5) and whose center-scaled pitch pinched the
+        # face top+bottom inward (a resize, not a nod — #7).
+        _vfade = 0.5 * _fhh                                               # depth fade band beyond the face
         _kp = [sorted(kf.value for kf in pmap[pid].keyforms) for pid in turn_ids]
         _tot = 1
         for _k in _kp:
@@ -527,24 +540,34 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 cr, sr = math.cos(roll), math.sin(roll)
 
                 def _squash(px_, py_):
-                    # A point at depth z rotating about the head axis moves x' = x·cos(a) + z·sin(a).
-                    # We had the cos term and not the sin one, which is a pure horizontal SCALE — so the
-                    # two eyes drifted APART toward the centre line instead of sweeping together, and a
-                    # full ±30° yaw read as the face getting narrower (2.8% of model width, vs 17% for
-                    # roll). Recover z from the head dome and add the missing term.
-                    #
-                    # This also anchors the neck for free, which is why translating used to stretch it:
-                    # the neck junction sits at the dome's bottom pole where z≈0, so it gets no sweep on
-                    # its own, while the face (z≈radius) gets the full one. No taper needed — the dome
-                    # already says where the head is deep and where it is edge-on.
+                    # Lift the point to 3D by its face-dome DEPTH and rotate the head rigidly about the neck
+                    # pivot (yaw about the vertical axis, pitch about the horizontal axis), then project. A
+                    # point at depth z rotating by angle a moves along that axis by x' = x·cos a + z·sin a.
+                    # Depth is DECOUPLED per axis (both share the vertical face window, fading past the face):
+                    #   • YAW uses a horizontal-cylinder depth (centre column deepest), so the chin/mouth are
+                    #     fully forward and sweep WITH the face (#4/#5).
+                    #   • PITCH uses a near-UNIFORM depth, so the whole face nods as one unit. A cylinder
+                    #     depth here would make the deep centre (mouth) out-nod the shallow sides (eyes),
+                    #     collapsing the eye->mouth spacing on wide-eyed faces (blondedrills/lavendergown) —
+                    #     a resize, the very thing #7 is about. Uniform depth keeps the proportions.
+                    # Rotating about the low neck pivot keeps pitch a nod that holds size. Identity at 0.
                     if _srad is None:
-                        z = 0.0
+                        zc = zf = 0.0
                     else:
-                        # Ellipsoid depth: x-radius _srad, vertical semi-axis _sry (reaches the neck).
-                        _q = 1.0 - ((px_ - _sx) / _srad) ** 2 - ((py_ - _sy) / _sry) ** 2
-                        z = _srad * math.sqrt(_q) if _q > 0.0 else 0.0  # 0 outside the dome (hair, edges)
-                    return (_sx + (px_ - _sx) * cyaw + z * syaw,
-                            _sy + (py_ - _sy) * cpit + z * spit)
+                        _d = abs(py_ - _sy)
+                        # YAW window fades depth just past the face so far hair gets no spurious sweep.
+                        _vw = 1.0 if _d <= _fhh else (max(0.0, 1.0 - (_d - _fhh) / _vfade) if _vfade else 0.0)
+                        # PITCH window is more generous: a nod is a vertical move, so a mouth near the
+                        # face's lower edge (or near-face hair) SHOULD nod with it. A tight window here
+                        # under-nodded a low-sitting mouth, changing the pupil->mouth gap (a resize) on
+                        # faces whose detected box crops close to the mouth (lavendergown, #7).
+                        _vwp = 1.0 if _d <= 1.5 * _fhh else (max(0.0, 1.0 - (_d - 1.5 * _fhh) / _fhh) if _fhh else 0.0)
+                        _hx = (px_ - _sx) / _srad
+                        zc = _srad * math.sqrt(max(0.0, 1.0 - _hx * _hx)) * _vw   # yaw: x-cylinder
+                        zf = _srad * _vwp                                         # pitch: ~uniform
+                    u = (px_ - _pivot[0]) * cyaw + zc * syaw   # yaw about the vertical axis (cylinder depth)
+                    v = (py_ - _pivot[1]) * cpit + zf * spit   # pitch about the horizontal axis (uniform)
+                    return (_pivot[0] + u, _pivot[1] + v)
 
                 grid = []
                 for (px_, py_), (w, ccx, ccy) in zip(rest, rigid):

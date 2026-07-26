@@ -59,6 +59,18 @@ _HOLD = 40
 # The tail. Driver back at neutral, model still settling — if the hair is frozen here, it is not rigged.
 _SETTLE = 60
 
+# Overlapping action (the Disney principle): a limb should not swing as one rigid board — its LOWER
+# segment (knee/elbow) trails the upper (hip/shoulder) and catches up a beat later. Without this a leg
+# "just moves to the position" and reads mechanical. For every limb UPPER joint a clip drives, the paired
+# LOWER joint follows with a short phase lag — reusing its existing pose value if the clip already drives
+# it (so the lower simply trails), or a gentle synthesised bend if it does not (so the limb still hinges).
+_LIMB_FOLLOW: dict[str, str] = {
+    "ParamLegLA": "ParamLegLB", "ParamLegRA": "ParamLegRB",
+    "ParamArmLA": "ParamArmLB", "ParamArmRA": "ParamArmRB",
+}
+_FOLLOW_LAG = 4       # frames the lower joint trails the upper
+_FOLLOW_FRAC = 0.45   # synthesised lower-joint swing as a fraction of the upper's, when not already driven
+
 
 @dataclass(frozen=True)
 class Drive:
@@ -230,8 +242,15 @@ def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[Animati
     cycle = 2 * (_SNAP + drive.hold)
     length = drive.cycles * cycle + _SNAP + drive.settle
 
-    lanes = []
-    for param, frac in present:
+    # Overlapping action: the lower limb joint trails the upper. Collect the lower joints to drive with a
+    # lag — the clip's own value if it already drives it, else a synthesised gentle bend at _FOLLOW_FRAC.
+    followers: dict[str, float] = {}
+    for pid, frac in drive.pose.items():
+        low = _LIMB_FOLLOW.get(pid)
+        if low and low in by_id:
+            followers[low] = drive.pose.get(low, frac * _FOLLOW_FRAC)
+
+    def _frames(param: Parameter, frac: float, lag: int) -> list[tuple[int, float]]:
         # a bidirectional clip reverses through the opposite pose; a one-directional one returns to
         # neutral instead (0.0 -> param.default), so it never passes through the mirror pose
         back = -frac if drive.bidirectional else 0.0
@@ -246,8 +265,30 @@ def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[Animati
             ]
         home = drive.cycles * cycle + _SNAP
         frames += [(home, param.default), (length, param.default)]
+        if lag:
+            # phase-lag the interior keyframes so the lower joint trails; keep the neutral endpoints
+            # pinned at 0 and length so the loop still closes. Dedup by frame (a shift can collide).
+            shifted = {0: param.default, length: param.default}
+            for f, v in frames:
+                if 0 < f < length:
+                    shifted[min(f + lag, length - 1)] = v
+            frames = sorted(shifted.items())
+        return frames
+
+    lanes = []
+    for param, frac in present:
+        if param.id in followers:
+            continue                      # driven below, with a lag, as a trailing lower joint
+        frames = _frames(param, frac, 0)
         lanes.append(AnimationLane(
             param_id=param.id,
+            keyframes=[AnimKeyframe(frame=f, value=v) for f, v in frames],
+            interpolation=InterpolateMode.cubic,
+        ))
+    for low, frac in followers.items():
+        frames = _frames(by_id[low], frac, _FOLLOW_LAG)
+        lanes.append(AnimationLane(
+            param_id=low,
             keyframes=[AnimKeyframe(frame=f, value=v) for f, v in frames],
             interpolation=InterpolateMode.cubic,
         ))

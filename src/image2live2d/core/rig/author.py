@@ -110,11 +110,12 @@ _BODY_TURN_X = math.radians(8.0)  # body sway at its extreme (range +-10)
 _BODY_TURN_Y = math.radians(6.0)
 _BODY_Z_DEG = 6.0     # body lean degrees at its extreme
 # Head turn/tilt at the extreme, for the .cmo3 warp deformer only (moc3/nijilive synthesise their own).
-# Magnitudes match the moc3 head-warp squash (HEAD_YAW/PITCH/ROLL) so the editable project turns like
-# the runtime files.
-_HEAD_TURN_X = 0.52   # yaw radians (horizontal squash) at full ParamAngleX
-_HEAD_TURN_Y = 0.42   # pitch radians (vertical squash) at full ParamAngleY
+# Magnitudes match the moc3 head-warp rotation (HEAD_YAW/PITCH/ROLL/NECK_DROP) so the editable project
+# turns like the runtime files.
+_HEAD_TURN_X = 0.52   # yaw radians (pseudo-3D head-turn) at full ParamAngleX
+_HEAD_TURN_Y = 0.42   # pitch radians (nod) at full ParamAngleY
 _HEAD_Z_DEG = 20.0    # head roll degrees at full ParamAngleZ
+_NECK_DROP = 0.35     # neck pivot below the jaw as a fraction of face HEIGHT (matches moc3 NECK_DROP)
 _HEAD_WARP_ID = "deform_head_turn"
 _HEAD_GRID = 4        # NxN control lattice over the head bbox (N-1 x N-1 warp segments)
 # The head-turn squash is anchored on the FACE ball, not the whole head group: long hair inflates the
@@ -523,32 +524,51 @@ def _head_turn_warp(
     moc3 warp applies, sharing :mod:`head_rigidity` so both backends foreshorten the face identically.
     """
     x0, y0, x1, y1 = _union_bbox(head_meshes)          # grid extent: the whole head
-    fx0, fy0, fx1, fy1 = _union_bbox(face_meshes)       # squash anchor: the face ball only
+    fx0, fy0, fx1, fy1 = _union_bbox(face_meshes)       # face dome: sizes depth + places the neck pivot
     cx, cy = (fx0 + fx1) / 2.0, (fy0 + fy1) / 2.0
     n = _HEAD_GRID
     lattice: list[Vec2] = [
         (x0 + (x1 - x0) * c / (n - 1), y0 + (y1 - y0) * r / (n - 1))
         for r in range(n) for c in range(n)
     ]
-    rx = max(cx - fx0, fx1 - cx, 1e-6)   # sphere radius = face half-extent (not the hair-inflated head)
-    ry = max(cy - fy0, fy1 - cy, 1e-6)
+    rx = max(cx - fx0, fx1 - cx, 1e-6)   # face half-WIDTH  -> horizontal-cylinder depth radius
+    ry = max(cy - fy0, fy1 - cy, 1e-6)   # face half-HEIGHT -> depth vertical window
     rigid = _rigidity_field(lattice, _rigidity_regions(protected or {}))
+    # Neck pivot: below the jaw (face bottom, toward the body) by _NECK_DROP of the face height, so the
+    # head rotates about the neck BASE — the jaw is above it and swings while the pivot barely moves. IRR
+    # space is y-DOWN (head at small y, body at larger y), so the jaw is at fy1 and "below" is +y.
+    pivot_x, pivot_y = cx, fy1 + _NECK_DROP * (2.0 * ry)
+    vfade = 0.5 * ry
+
+    def _depth(x: float, y: float) -> float:
+        # Horizontal-cylinder depth over the face WIDTH, held flat down the face height (fading beyond),
+        # so the center column (nose/mouth/chin) is fully forward at every height and turns as a whole —
+        # the same depth model as the moc3 warp. Mirrors moc3_emit._squash (see the head-turn note there).
+        hx = (x - cx) / rx
+        z = rx * math.sqrt(max(0.0, 1.0 - hx * hx))
+        d = abs(y - cy)
+        if d > ry:
+            z *= max(0.0, 1.0 - (d - ry) / vfade) if vfade else 0.0
+        return z
 
     def squash(a: float, axis: str) -> list[Vec2]:
-        shift = (rx if axis == "x" else ry) * math.sin(a)   # anchor the pivot (see _head_turn)
+        ca, sa = math.cos(a), math.sin(a)
 
         def delta(x: float, y: float) -> Vec2:
+            # Rigid rotation about the neck pivot, projected: a point at depth z rotates by x' = x·cos a
+            # + z·sin a. Yaw rotates x about the vertical axis, pitch rotates y about the horizontal axis.
+            z = _depth(x, y)
             if axis == "x":
-                phi = math.asin(_clamp((x - cx) / rx, -1.0, 1.0))
-                return (cx + rx * math.sin(phi + a) - x - shift, 0.0)
-            psi = math.asin(_clamp((y - cy) / ry, -1.0, 1.0))
-            return (0.0, cy + ry * math.sin(psi + a) - y - shift)
+                u = x - pivot_x
+                return (u * ca + z * sa - u, 0.0)
+            v = y - pivot_y
+            return (0.0, v * ca + z * sa - v)
 
         cell: list[Vec2] = []
         for (x, y), (w, ccx, ccy) in zip(lattice, rigid):
             dx, dy = delta(x, y)
             if w > 0.0:
-                # Rigid: the whole feature shifts by its centroid's OWN squash delta, so it never narrows.
+                # Rigid: the whole feature shifts by its centroid's OWN delta, so it never foreshortens.
                 rdx, rdy = delta(ccx, ccy)
                 dx, dy = dx * (1.0 - w) + rdx * w, dy * (1.0 - w) + rdy * w
             cell.append((dx, dy))
@@ -556,9 +576,9 @@ def _head_turn_warp(
 
     def roll(frac: float) -> list[Vec2]:
         ang = math.radians(_HEAD_Z_DEG) * frac
-        ca, sa = math.cos(ang), math.sin(ang)
-        cell = [(cx + (x - cx) * ca - (y - cy) * sa - x, cy + (x - cx) * sa + (y - cy) * ca - y)
-                for x, y in lattice]
+        ca, sa = math.cos(ang), math.sin(ang)   # in-plane roll about the same neck pivot as the moc3 warp
+        cell = [(pivot_x + (x - pivot_x) * ca - (y - pivot_y) * sa - x,
+                 pivot_y + (x - pivot_x) * sa + (y - pivot_y) * ca - y) for x, y in lattice]
         return _cap_cell(cell)
 
     warp = Deformer(id=_HEAD_WARP_ID, type=DeformerType.warp, parent=None,

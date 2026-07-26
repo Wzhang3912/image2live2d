@@ -546,16 +546,23 @@ def _head_turn_warp(
     pivot_x, pivot_y = cx, fy1 + _NECK_DROP * (2.0 * ry)
     vfade = 0.5 * ry
 
-    def _depth(x: float, y: float) -> float:
-        # Horizontal-cylinder depth over the face WIDTH, held flat down the face height (fading beyond),
-        # so the center column (nose/mouth/chin) is fully forward at every height and turns as a whole —
-        # the same depth model as the moc3 warp. Mirrors moc3_emit._squash (see the head-turn note there).
-        hx = (x - cx) / rx
-        z = rx * math.sqrt(max(0.0, 1.0 - hx * hx))
+    def _depth(x: float, y: float, uniform: bool) -> float:
+        # Depth on the face dome, DECOUPLED per axis (mirrors moc3_emit._squash): both share the vertical
+        # face window (fading beyond the face). YAW uses a horizontal-cylinder depth (centre column deepest,
+        # so the chin sweeps as a whole); PITCH uses a near-UNIFORM depth so the whole face nods as one unit
+        # — a cylinder there makes the deep centre (mouth) out-nod the shallow sides (eyes) and collapses the
+        # eye->mouth spacing on wide-eyed faces (a resize, #7). Uniform depth keeps the proportions.
         d = abs(y - cy)
-        if d > ry:
-            z *= max(0.0, 1.0 - (d - ry) / vfade) if vfade else 0.0
-        return z
+        if uniform:
+            # PITCH: a nod is a vertical move, so a mouth near the face's lower edge (or near-face hair)
+            # should nod WITH it. A generous window (flat to 1.5·ry, fading over another ry) keeps a
+            # low-sitting mouth at full depth, so the pupil->mouth gap holds (no resize, #7).
+            vwp = 1.0 if d <= 1.5 * ry else (max(0.0, 1.0 - (d - 1.5 * ry) / ry) if ry else 0.0)
+            return rx * vwp
+        # YAW: fade depth just past the face so far hair gets no spurious horizontal sweep.
+        vw = 1.0 if d <= ry else (max(0.0, 1.0 - (d - ry) / vfade) if vfade else 0.0)
+        hx = (x - cx) / rx
+        return rx * math.sqrt(max(0.0, 1.0 - hx * hx)) * vw
 
     def squash(a: float, axis: str) -> list[Vec2]:
         ca, sa = math.cos(a), math.sin(a)
@@ -563,12 +570,11 @@ def _head_turn_warp(
         def delta(x: float, y: float) -> Vec2:
             # Rigid rotation about the neck pivot, projected: a point at depth z rotates by x' = x·cos a
             # + z·sin a. Yaw rotates x about the vertical axis, pitch rotates y about the horizontal axis.
-            z = _depth(x, y)
             if axis == "x":
                 u = x - pivot_x
-                return (u * ca + z * sa - u, 0.0)
+                return (u * ca + _depth(x, y, uniform=False) * sa - u, 0.0)
             v = y - pivot_y
-            return (0.0, v * ca + z * sa - v)
+            return (0.0, v * ca + _depth(x, y, uniform=True) * sa - v)
 
         cell: list[Vec2] = []
         for (x, y), (w, ccx, ccy) in zip(lattice, rigid):

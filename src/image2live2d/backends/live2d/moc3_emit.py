@@ -540,25 +540,33 @@ def rig_to_moc3(rig, *, log=lambda m: None, atlas_uv=None):
                 cr, sr = math.cos(roll), math.sin(roll)
 
                 def _squash(px_, py_):
-                    # Lift the point to 3D by its face-dome DEPTH, rotate the head rigidly about the neck
-                    # pivot (yaw about the vertical axis, pitch about the horizontal axis), then project.
-                    # A point at depth z rotating by angle a moves along that axis by x' = x·cos a + z·sin a.
-                    # The center column carries full depth, so the chin/mouth sweep WITH the face (#4/#5);
-                    # rotating about the low neck pivot makes pitch a nod that keeps size (#7). Identity at
-                    # yaw=pitch=0, so rest is untouched.
+                    # Lift the point to 3D by its face-dome DEPTH and rotate the head rigidly about the neck
+                    # pivot (yaw about the vertical axis, pitch about the horizontal axis), then project. A
+                    # point at depth z rotating by angle a moves along that axis by x' = x·cos a + z·sin a.
+                    # Depth is DECOUPLED per axis (both share the vertical face window, fading past the face):
+                    #   • YAW uses a horizontal-cylinder depth (centre column deepest), so the chin/mouth are
+                    #     fully forward and sweep WITH the face (#4/#5).
+                    #   • PITCH uses a near-UNIFORM depth, so the whole face nods as one unit. A cylinder
+                    #     depth here would make the deep centre (mouth) out-nod the shallow sides (eyes),
+                    #     collapsing the eye->mouth spacing on wide-eyed faces (blondedrills/lavendergown) —
+                    #     a resize, the very thing #7 is about. Uniform depth keeps the proportions.
+                    # Rotating about the low neck pivot keeps pitch a nod that holds size. Identity at 0.
                     if _srad is None:
-                        z = 0.0
+                        zc = zf = 0.0
                     else:
+                        _d = abs(py_ - _sy)
+                        # YAW window fades depth just past the face so far hair gets no spurious sweep.
+                        _vw = 1.0 if _d <= _fhh else (max(0.0, 1.0 - (_d - _fhh) / _vfade) if _vfade else 0.0)
+                        # PITCH window is more generous: a nod is a vertical move, so a mouth near the
+                        # face's lower edge (or near-face hair) SHOULD nod with it. A tight window here
+                        # under-nodded a low-sitting mouth, changing the pupil->mouth gap (a resize) on
+                        # faces whose detected box crops close to the mouth (lavendergown, #7).
+                        _vwp = 1.0 if _d <= 1.5 * _fhh else (max(0.0, 1.0 - (_d - 1.5 * _fhh) / _fhh) if _fhh else 0.0)
                         _hx = (px_ - _sx) / _srad
-                        z = _srad * math.sqrt(max(0.0, 1.0 - _hx * _hx))    # horizontal-cylinder depth
-                        _d = abs(py_ - _sy)                                 # flat window over the face,
-                        if _d > _fhh:                                       # fading to 0 beyond it
-                            z *= max(0.0, 1.0 - (_d - _fhh) / _vfade) if _vfade else 0.0
-                    u = px_ - _pivot[0]
-                    v = py_ - _pivot[1]
-                    w = z
-                    u, w = u * cyaw + w * syaw, -u * syaw + w * cyaw        # yaw about the vertical axis
-                    v, w = v * cpit + w * spit, -v * spit + w * cpit        # pitch about the horizontal axis
+                        zc = _srad * math.sqrt(max(0.0, 1.0 - _hx * _hx)) * _vw   # yaw: x-cylinder
+                        zf = _srad * _vwp                                         # pitch: ~uniform
+                    u = (px_ - _pivot[0]) * cyaw + zc * syaw   # yaw about the vertical axis (cylinder depth)
+                    v = (py_ - _pivot[1]) * cpit + zf * spit   # pitch about the horizontal axis (uniform)
                     return (_pivot[0] + u, _pivot[1] + v)
 
                 grid = []

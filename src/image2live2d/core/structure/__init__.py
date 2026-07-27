@@ -69,6 +69,7 @@ from .limbs import (
     reassign_arm_mislabeled_as_leg,
     split_bundled_pairs,
     split_fused_legs,
+    split_limb_segments,
 )
 from .zorder import (
     BROWS,
@@ -132,4 +133,5 @@ __all__ = [
     "reassign_arm_mislabeled_as_leg",
     "split_bundled_pairs",
     "split_fused_legs",
+    "split_limb_segments",
 ]

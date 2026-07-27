@@ -182,13 +182,17 @@ _DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more t
 #                       remaining magnitude runaways (blink/hair/cloth/brow) when See-through emits an
 #                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
 _BREATH_SHIFT = 0.008 # crown's upward bob (model units) at breath 1; tapers to 0 at the feet (see _breath)
-_ARM_DEG = 14.0       # arm swing degrees about the shoulder joint at the extreme
+_ARM_DEG = 24.0       # arm swing degrees about the shoulder joint at the extreme. Larger than the old
+#                       14deg now that the arm is a rigid FK chain (see the limb loop): the segments
+#                       don't shear, so the swing is limited only by the arm/torso shoulder seam.
 # Legs are close together (feet only ~0.08 of canvas apart), so a swing that would look fine on an arm
 # converges the two feet past each other into a cross. A leg on a standing character barely moves
 # anyway. Keep the swing small enough that opposite-phase legs stay short of crossing: 2*len*sin(deg)
 # has to stay under the foot gap, which at ~0.4 leg length means well under ~6deg.
 _LEG_DEG = 5.0        # leg swing degrees about the hip joint at the extreme
-_ELBOW_DEG = 32.0     # forearm bend about the elbow at the extreme (lower segment ramps in)
+_ELBOW_DEG = 55.0     # forearm bend about the elbow at the extreme. On a segmented arm this is a RIGID
+#                       rotation of the forearm segment (no shear), so it reaches a natural bent-elbow
+#                       pose; on an unsegmented limb (fallback) the lower segment ramps in softly.
 _KNEE_DEG = 16.0      # lower-leg bend about the knee at the extreme (also swings the foot laterally)
 _LIMB_BEND_BAND = 0.35  # fraction of the lower segment over which the bend ramps 0->full (a soft,
 #                         gap-free fold at the joint rather than a hard crease on the continuous mesh)
@@ -445,10 +449,22 @@ def author_rig(
             [m for _, m in limb], joint, end, _mid_x,
             [(pid, m) for pid, m in clothing_candidates
              if pid not in _all_rider_ids and _draw.get(pid, 0) >= limb_z])
+        # A limb cut into upper+forearm segments (see structure.limbs.split_limb_segments) is a real
+        # two-link FK chain: the shoulder rotates the WHOLE arm rigidly, the elbow rotates ONLY the
+        # forearm segment rigidly. Rigid segments don't shear, so the elbow can swing through a human
+        # range with no intra-mesh tearing — the soft height-weighted _limb_bend below is the fallback
+        # for a limb that arrives as one mesh (legs, or an arm too small to segment).
+        forearm = [(pid, m) for pid, m in limb if pid.endswith("_lo")]
+        upper = [(pid, m) for pid, m in limb if pid.endswith("_up")]
+        segmented = bool(forearm and upper)
         limb = limb + riders
         side = 1.0 if joint[0] >= _mid_x else -1.0    # +param lifts/splays OUTWARD on both sides
         params.append(_rotation(swing_id, limb, joint, deg=swing_deg * side, follow=follow))  # swing
-        params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg * side))   # lower-segment bend
+        if segmented:
+            # riders (a cuff/hand at the wrist) ride the forearm's elbow rotation too
+            params.append(_rotation(bend_id, forearm + riders, elbow, deg=bend_deg * side))
+        else:
+            params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg * side))   # soft fold
 
     # --- Breath (subtle whole-character bob) ----------------------------------------------------
     all_parts = [

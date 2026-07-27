@@ -21,6 +21,7 @@ from .core.structure import (
     reassign_arm_mislabeled_as_leg,
     split_bundled_pairs,
     split_fused_legs,
+    split_limb_segments,
 )
 from .core.types import LayerStack
 from .irr.schema import Rig
@@ -69,6 +70,7 @@ def prepare_meshes(stack: LayerStack):
     reassign_arm_mislabeled_as_leg(stack, meshes)  # arms the decomposer labelled 'leg' -> arm role
     split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
     split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
+    split_limb_segments(stack, meshes)       # cut each arm at the elbow -> upper+forearm FK segments
     _lift_occluded_accessories(stack, meshes)
     normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
     normalize_leg_zorder(stack, meshes)      # a leg cut at the hemline shouldn't paint over the skirt

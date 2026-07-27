@@ -31,12 +31,30 @@ Clips go to the extremes of each range on purpose. Extremes are where an auto-ri
 least trustworthy — the cardboard-arm stretch was found at the end of ``ParamAngleX``'s travel, not in
 the middle of it.
 
+**Two motion styles.** The snap → hold → settle shape above is an *impulse* — it is the right tool for
+a head clip, where the frozen hold is precisely when you watch the hair lag and catch up. But an arm or
+a leg has no hair to trail: the limb itself is the only thing on screen, and a snap-to-pose then a
+40-frame freeze reads as a robot arm, not a character. So the body/limb clips use two *baked* styles
+instead — a curve sampled densely (every couple of frames) into keyframes, so the motion is smooth under
+any interpolation and what the diagnostic renderer draws is what the runtime plays:
+
+* *oscillate* — a continuous eased sine (``body_sway``, ``body_bow``, ``legs_sway``, ``arms_swing``):
+  the character sways without ever stopping dead, the peak velocity at each zero-crossing still swings
+  the cloth, and an integer number of cycles makes the loop seamless.
+* *gesture* — an eased raise with a little overshoot, a *living* hold (a faint breath, not a freeze) and
+  a settling follow-through (``arms_raise``, ``legs_swing``): a deliberate one-directional action that
+  never passes through the crossing/mirror pose.
+
+Both keep the diagnostic guarantees: they reach the extremes, they carry enough velocity to excite the
+pendulums, and the left/right sides still move in opposite phase where that is the point of the clip.
+
 Like the idle and the expression sheet, every lane is present-gated (a bare portrait gets the face
 clips and no limb clips) and clamped to its parameter's own range.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 from ...irr.schema import (
@@ -71,6 +89,28 @@ _LIMB_FOLLOW: dict[str, str] = {
 _FOLLOW_LAG = 4       # frames the lower joint trails the upper
 _FOLLOW_FRAC = 0.45   # synthesised lower-joint swing as a fraction of the upper's, when not already driven
 
+# Baked-motion styles (body/limb clips). A curve sampled every _STRIDE frames — dense enough to read
+# smooth whether the runtime interpolates linearly or by bezier, so the diagnostic GIF (which samples
+# straight lines) shows exactly what the .moc3 plays.
+_STRIDE = 2
+
+# oscillate: a continuous sine. A quarter-period of 12 frames -> a 48-frame (1.25 Hz) cycle; two cycles
+# per clip. Peak velocity at the zero-crossings (~0.13 of range per frame) matches the old snap's impulse,
+# so cloth still swings, but nothing ever holds still. Quarter-period is a multiple of _STRIDE so the
+# peaks (the extremes of the range) land exactly on sampled frames.
+_OSC_QUARTER = 12
+_OSC_CYCLES = 2
+
+# gesture: an eased one-directional action. rise (with a touch of overshoot) -> a living hold that breathes
+# and settles off the overshoot -> an eased release -> a tail that dips and recovers (follow-through).
+_G_RISE = 18
+_G_HOLD = 46
+_G_FALL = 18
+_G_TAIL = 42
+_G_OVERSHOOT = 0.07   # how far past the pose the rise carries, as a fraction of the pose
+_G_BREATH = 0.025     # amplitude of the living hold's breath
+_G_SETTLE_DIP = 0.04  # how far the tail dips back past neutral before recovering
+
 
 @dataclass(frozen=True)
 class Drive:
@@ -91,6 +131,15 @@ class Drive:
     # like a stance, while the mirror pose swings them *inward* — two close-together legs then cross
     # into an X. A one-directional drive splays out and comes back, never through the crossing pose.
     bidirectional: bool = True
+    # How the clip is shaped over time. ``"impulse"`` is the snap/hold/settle diagnostic (the default,
+    # right for the yaw clip where the frozen hold is when the hair lag is visible). ``"oscillate"`` is a
+    # continuous eased sine and ``"gesture"`` is an eased one-directional action — both baked as dense
+    # keyframes so a limb (or a nodding/tilting head) reads as alive rather than robotic.
+    style: str = "impulse"
+    # ``oscillate`` tuning: the quarter-period (frames) and cycle count. The defaults are a gentle ~1.25 Hz
+    # sway; a shake overrides them to a brisk, rapid-reversal wobble.
+    osc_quarter: int = _OSC_QUARTER
+    osc_cycles: int = _OSC_CYCLES
 
 
 # The sheet. Each clip isolates one axis of the rig so a defect is attributable: if the hair only fails
@@ -99,20 +148,20 @@ _DRIVES: dict[str, Drive] = {
     # --- head: the driver of every hair and head-accessory pendulum -------------------------------
     "head_yaw": Drive({"ParamAngleX": 1.0},
                       note="hair sways side to side and lags the turn; earrings swing"),
-    "head_pitch": Drive({"ParamAngleY": 1.0},
+    "head_pitch": Drive({"ParamAngleY": 1.0}, style="oscillate",
                         note="a nod bobs the hair vertically (the emitter maps pitch to anchor Y)"),
-    "head_roll": Drive({"ParamAngleZ": 1.0},
+    "head_roll": Drive({"ParamAngleZ": 1.0}, style="oscillate",
                        note="a tilt rolls the hair; the fringe should not slide off the forehead"),
     # The hardest thing you can ask of a hair pendulum: reverse the driver before the previous swing
-    # has settled. Under-damped hair whips; over-damped hair reads as a helmet. Both show up here and
-    # nowhere else.
-    "head_shake": Drive({"ParamAngleX": 0.8}, cycles=4, hold=4,
+    # has settled. Under-damped hair whips; over-damped hair reads as a helmet. A brisk continuous sine
+    # (short period, several cycles) keeps the reversals rapid without ever snapping rigidly.
+    "head_shake": Drive({"ParamAngleX": 0.8}, style="oscillate", osc_quarter=6, osc_cycles=4,
                         note="rapid reversals — hair should lag and trail, not snap rigidly along"),
 
     # --- body: the driver of the skirt / cloth zones ----------------------------------------------
-    "body_sway": Drive({"ParamBodyAngleX": 1.0, "ParamBodyAngleZ": 0.5},
+    "body_sway": Drive({"ParamBodyAngleX": 1.0, "ParamBodyAngleZ": 0.5}, style="oscillate",
                        note="skirt/cloth zones swing and settle; the hem should lag the hips"),
-    "body_bow": Drive({"ParamBodyAngleY": 1.0},
+    "body_bow": Drive({"ParamBodyAngleY": 1.0}, style="oscillate",
                       note="lean in/out — cloth should fall, not shear with the torso"),
 
     # --- limbs: the de-cardboard check ------------------------------------------------------------
@@ -122,23 +171,23 @@ _DRIVES: dict[str, Drive] = {
     # One-directional: raise and return, not down through the inward/crossed mirror pose.
     "arms_raise": Drive({"ParamArmLA": 1.0, "ParamArmLB": 0.7,
                          "ParamArmRA": 1.0, "ParamArmRB": 0.7},
-                        bidirectional=False,
+                        bidirectional=False, style="gesture",
                         note="both arms lift outward together — sleeves must ride their own arm"),
-    "arms_swing": Drive({"ParamArmLA": 1.0, "ParamArmRA": -1.0},
+    "arms_swing": Drive({"ParamArmLA": 1.0, "ParamArmRA": -1.0}, style="oscillate",
                         note="opposite phase — proves left and right are separate parts"),
     # Both legs to +max = splay OUTWARD (the limb convention is mirror-symmetric: +param lifts/splays
     # each side away from the midline). Two close-together legs rotated toward each other would cross
     # into an X, so this splays them to a widening stance and returns — never through the crossing pose.
     "legs_swing": Drive({"ParamLegLA": 1.0, "ParamLegLB": 0.6,
                          "ParamLegRA": 1.0, "ParamLegRB": 0.6},
-                        bidirectional=False,
+                        bidirectional=False, style="gesture",
                         note="both legs splay outward and back (never through the crossing pose) — "
                              "proves the legs were cut at the crotch seam"),
     # The natural counterpart to the splay diagnostic: a weight-shift. Opposite param signs move the two
     # legs in the *same* screen direction (a lean), so the gap between the feet is preserved and they
     # can never cross — the failure mode `legs_swing` was reshaped to avoid. Small amplitude: this reads
     # as a body-language shift, not a stance.
-    "legs_sway": Drive({"ParamLegLA": 0.5, "ParamLegRA": -0.5},
+    "legs_sway": Drive({"ParamLegLA": 0.5, "ParamLegRA": -0.5}, style="oscillate",
                        note="a gentle weight-shift — both legs lean together and the skirt hem follows; "
                             "the feet keep their spacing (parallel motion, never crossing)"),
 
@@ -232,8 +281,13 @@ def _drivable(
 
 
 def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[AnimationLane], int]:
-    """Lanes for one ping-ponged clip, plus its length. Empty when the character has none of its
-    parameters."""
+    """Lanes for one clip, plus its length. Empty when the character has none of its parameters.
+
+    Dispatches on the clip's ``style``: the default ``"impulse"`` is the snap/hold/settle diagnostic;
+    ``"oscillate"`` and ``"gesture"`` are baked (densely sampled) natural motion for body/limb clips."""
+    if drive.style in ("oscillate", "gesture"):
+        return _baked_lanes(drive, by_id)
+
     present = [(by_id[pid], frac) for pid, frac in drive.pose.items() if pid in by_id]
     if not present:
         return [], 0
@@ -242,13 +296,9 @@ def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[Animati
     cycle = 2 * (_SNAP + drive.hold)
     length = drive.cycles * cycle + _SNAP + drive.settle
 
-    # Overlapping action: the lower limb joint trails the upper. Collect the lower joints to drive with a
-    # lag — the clip's own value if it already drives it, else a synthesised gentle bend at _FOLLOW_FRAC.
-    followers: dict[str, float] = {}
-    for pid, frac in drive.pose.items():
-        low = _LIMB_FOLLOW.get(pid)
-        if low and low in by_id:
-            followers[low] = drive.pose.get(low, frac * _FOLLOW_FRAC)
+    # Overlapping action: the lower limb joint trails the upper (its value the clip's own, else a
+    # synthesised gentle bend) — driven below with a lag.
+    followers = _followers(drive, by_id)
 
     def _frames(param: Parameter, frac: float, lag: int) -> list[tuple[int, float]]:
         # a bidirectional clip reverses through the opposite pose; a one-directional one returns to
@@ -293,6 +343,95 @@ def _clip_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[Animati
             interpolation=InterpolateMode.cubic,
         ))
     return lanes, length
+
+
+def _followers(drive: Drive, by_id: dict[str, Parameter]) -> dict[str, float]:
+    """The lower limb joints that trail their upper joint (overlapping action), mapped to the signed
+    fraction to drive them at — the clip's own value if it drives one, else a gentle synthesised bend."""
+    followers: dict[str, float] = {}
+    for pid, frac in drive.pose.items():
+        low = _LIMB_FOLLOW.get(pid)
+        if low and low in by_id:
+            followers[low] = drive.pose.get(low, frac * _FOLLOW_FRAC)
+    return followers
+
+
+def _smoother(x: float) -> float:
+    """Smootherstep on [0, 1]: eases in and out with zero velocity at both ends (Perlin's 6x^5-15x^4+10x^3)."""
+    x = min(1.0, max(0.0, x))
+    return x * x * x * (x * (6.0 * x - 15.0) + 10.0)
+
+
+def _sample_frames(length: int) -> list[int]:
+    """Every _STRIDE-th frame in [0, length], always including the final frame so the lane closes."""
+    frames = list(range(0, length, _STRIDE))
+    if frames[-1] != length:
+        frames.append(length)
+    return frames
+
+
+def _gesture_env(f: float) -> float:
+    """The gesture envelope, peaking at exactly 1.0 (the pose extreme) and never past it: rise to the
+    peak, a breathing hold that settles *down* off the peak by the overshoot, an eased release, then a
+    tail that dips past neutral and recovers (the follow-through)."""
+    if f <= 0.0:
+        return 0.0
+    rest = 1.0 - _G_OVERSHOOT                                          # the resting hold, below the peak
+    if f < _G_RISE:
+        return _smoother(f / _G_RISE)                                 # 0 -> 1.0 (the extreme)
+    f -= _G_RISE
+    if f < _G_HOLD:
+        x = f / _G_HOLD
+        ramp = _smoother(min(1.0, 2.0 * x))                          # 0 -> 1 over the first half
+        settle = _G_OVERSHOOT * (1.0 - ramp)                         # 1.0 -> rest over the first half
+        breath = _G_BREATH * math.sin(2.0 * math.pi * x) * ramp      # a faint breath, once settled (never past the peak)
+        return rest + settle + breath
+    f -= _G_HOLD
+    if f < _G_FALL:
+        return rest * (1.0 - _smoother(f / _G_FALL))                  # eased release to neutral
+    f -= _G_FALL
+    return -_G_SETTLE_DIP * math.sin(math.pi * min(1.0, f / _G_TAIL))  # follow-through: dip and recover
+
+
+def _baked_lanes(drive: Drive, by_id: dict[str, Parameter]) -> tuple[list[AnimationLane], int]:
+    """Densely-sampled natural motion: a continuous sine (``oscillate``) or an eased one-way action
+    (``gesture``). Sampling every _STRIDE frames makes it smooth under any interpolation, so the diagnostic
+    GIF (straight lines between anchors) and the runtime (beziers) draw the same living motion."""
+    present = [(by_id[pid], frac) for pid, frac in drive.pose.items() if pid in by_id]
+    if not present:
+        return [], 0
+    followers = _followers(drive, by_id)
+
+    if drive.style == "oscillate":
+        period = 4 * drive.osc_quarter
+        length = drive.osc_cycles * period
+        # peaks (the extremes of the range) land on sampled frames; a lag is a phase shift, so a follower
+        # trails the upper joint yet still closes the loop (the sine is periodic over the clip length).
+
+        def drive_at(f: int, lag: int) -> float:
+            return math.sin(2.0 * math.pi * (f - lag) / period)
+    else:  # gesture
+        length = _G_RISE + _G_HOLD + _G_FALL + _G_TAIL
+
+        def drive_at(f: int, lag: int) -> float:
+            return _gesture_env(f - lag)
+
+    frames = _sample_frames(length)
+    lanes: list[AnimationLane] = []
+    for param, frac in present:
+        if param.id in followers:
+            continue                       # driven below, with a lag, as a trailing lower joint
+        lanes.append(_baked_lane(param, frac, frames, drive_at, 0))
+    for low, frac in followers.items():
+        lanes.append(_baked_lane(by_id[low], frac, frames, drive_at, _FOLLOW_LAG))
+    return lanes, length
+
+
+def _baked_lane(param, frac, frames, drive_at, lag) -> AnimationLane:
+    # linear between dense anchors: identical in the diagnostic renderer and in a Cubism runtime, and a
+    # steady velocity through each short segment keeps the pendulum excitation honest
+    kfs = [AnimKeyframe(frame=f, value=_at(param, frac * drive_at(f, lag))) for f in frames]
+    return AnimationLane(param_id=param.id, keyframes=kfs, interpolation=InterpolateMode.linear)
 
 
 def _at(param: Parameter, frac: float) -> float:

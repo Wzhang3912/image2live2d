@@ -440,3 +440,90 @@ def split_bundled_pairs(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
             created.append(ly.id)
 
     return created
+
+
+# --- FK segmentation (upper arm + forearm) ---------------------------------------------------------
+# An arm handed back as one mesh can only rotate as one piece: a big shoulder swing shears the whole
+# sheet, so the swing has to stay small and the limb reads as a stiff hinge. Cutting it at the elbow
+# into two RIGID segments (upper arm + forearm) lets each rotate on its own joint without any
+# intra-mesh shear — a real two-link FK chain — so the shoulder and elbow can move through a human
+# range. The two segments overlap in a band straddling the elbow: the overlap is the same arm pixels
+# in both halves, so as the forearm rotates the band covers the gap that would otherwise open at the
+# joint. Legs get the same treatment at the knee.
+_SEG_SUFFIX = ("_up", "_lo")     # upper (shoulder side) / lower (wrist side) segment id suffixes
+_SEG_OVERLAP_FRAC = 0.20         # overlap band half-height, as a fraction of the limb's height
+_SEG_ELBOW_FRAC = 0.50           # the cut sits this fraction of the way down from the top (shoulder)
+_SEG_MIN_HEIGHT_FRAC = 0.10      # skip a limb shorter than this fraction of the character's height
+_SEG_ROLES: tuple[SemanticRole, ...] = (SemanticRole.arm_l, SemanticRole.arm_r)
+
+
+def split_limb_segments(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
+    """Cut each arm into an upper-arm and a forearm segment, overlapping at the elbow, for a real
+    two-joint FK chain. Both segments keep the arm's role and share its texture (UVs pick the region —
+    nothing is written to disk); the forearm is drawn just above the upper arm so its proximal overlap
+    covers the joint seam. Mutates ``stack`` and ``meshes``; returns the ids created.
+
+    Idempotent: a segment (id ending in ``_up``/``_lo``) is never re-split.
+    """
+    all_verts = [v for m in meshes for v in m.vertices]
+    if not all_verts:
+        return []
+    fig_h = max(_bbox(all_verts)[3] - _bbox(all_verts)[1], 1e-6)
+    mesh_by_part = {m.part_id: m for m in meshes}
+
+    created: list[str] = []
+    for layer in list(stack.layers):
+        if layer.semantic_role not in _SEG_ROLES or layer.id.endswith(_SEG_SUFFIX):
+            continue
+        mesh = mesh_by_part.get(layer.id)
+        if mesh is None:
+            continue
+        x0, y0, x1, y1 = _bbox(mesh.vertices)
+        h = y1 - y0
+        if h < _SEG_MIN_HEIGHT_FRAC * fig_h:
+            continue                                     # too small to be a real, articulable arm
+        cut = y1 - _SEG_ELBOW_FRAC * h                   # y-up: shoulder at y1 (top), wrist at y0
+        band = _SEG_OVERLAP_FRAC * h
+        # upper keeps everything from the shoulder down to just past the elbow; forearm keeps everything
+        # from the wrist up to just past the elbow — the [cut-band, cut+band] band is in both.
+        upper = [i for i, (_, vy) in enumerate(mesh.vertices) if vy >= cut - band]
+        fore = [i for i, (_, vy) in enumerate(mesh.vertices) if vy <= cut + band]
+        segs = _segment_meshes(mesh, layer.id, upper, fore)
+        if segs is None:
+            continue                                     # a triangle spans past the band, or a degenerate half
+
+        # forearm drawn just above the upper arm (its proximal overlap hides the elbow seam)
+        halves = [
+            Layer(id=f"{layer.id}{_SEG_SUFFIX[0]}", semantic_role=layer.semantic_role,
+                  texture_path=layer.texture_path, draw_order=layer.draw_order,
+                  width=layer.width, height=layer.height, bbox=layer.bbox),
+            Layer(id=f"{layer.id}{_SEG_SUFFIX[1]}", semantic_role=layer.semantic_role,
+                  texture_path=layer.texture_path, draw_order=layer.draw_order,
+                  width=layer.width, height=layer.height, bbox=layer.bbox),
+        ]
+        i = stack.layers.index(layer)
+        stack.layers[i:i + 1] = halves
+        j = meshes.index(mesh)
+        meshes[j:j + 1] = list(segs)
+        for ly, m in zip(halves, segs):
+            mesh_by_part[ly.id] = m
+            created.append(ly.id)
+    return created
+
+
+def _segment_meshes(
+    mesh: Mesh, base_id: str, upper: list[int], fore: list[int],
+) -> tuple[Mesh, Mesh] | None:
+    """Two overlapping sub-meshes (upper, forearm) — or ``None`` if either is degenerate or a triangle
+    falls outside both halves (which would leave a hole at the joint: the overlap band is too narrow)."""
+    up = _sub_mesh(mesh, f"{base_id}{_SEG_SUFFIX[0]}", upper)
+    lo = _sub_mesh(mesh, f"{base_id}{_SEG_SUFFIX[1]}", fore)
+    if up is None or lo is None:
+        return None
+    # every source triangle must survive in at least one half — else the cut tears a hole in the limb
+    up_set, fore_set = set(upper), set(fore)
+    for a, b, c in mesh.triangles:
+        tri = (a, b, c)
+        if not (all(v in up_set for v in tri) or all(v in fore_set for v in tri)):
+            return None
+    return up, lo

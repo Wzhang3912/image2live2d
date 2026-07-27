@@ -450,18 +450,26 @@ def split_bundled_pairs(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
 # range. The two segments overlap in a band straddling the elbow: the overlap is the same arm pixels
 # in both halves, so as the forearm rotates the band covers the gap that would otherwise open at the
 # joint. Legs get the same treatment at the knee.
-_SEG_SUFFIX = ("_up", "_lo")     # upper (shoulder side) / lower (wrist side) segment id suffixes
+_SEG_SUFFIX = ("_up", "_lo")     # upper (shoulder/hip side) / lower (wrist/ankle side) id suffixes
 _SEG_OVERLAP_FRAC = 0.20         # overlap band half-height, as a fraction of the limb's height
-_SEG_ELBOW_FRAC = 0.50           # the cut sits this fraction of the way down from the top (shoulder)
+_SEG_ELBOW_FRAC = 0.50           # the cut sits this fraction of the way down from the top: the elbow is
+#                                  ~mid-arm (shoulder->wrist) and the knee is ~mid-leg (hip->sole), so
+#                                  one fraction serves both. The 0.20 overlap band absorbs the variation.
 _SEG_MIN_HEIGHT_FRAC = 0.10      # skip a limb shorter than this fraction of the character's height
-_SEG_ROLES: tuple[SemanticRole, ...] = (SemanticRole.arm_l, SemanticRole.arm_r)
+# Arms AND legs both get a real two-link chain: an arm becomes upper-arm + forearm about the elbow, a
+# leg becomes thigh + shin(+foot) about the knee. The authoring side is role-generic — it detects the
+# ``_up``/``_lo`` segments by suffix and gives whichever role carries them the rigid FK treatment, with
+# the per-role bend range (elbow vs knee) coming from the limb spec — so both flow through unchanged.
+_SEG_ROLES: tuple[SemanticRole, ...] = (
+    SemanticRole.arm_l, SemanticRole.arm_r, SemanticRole.leg_l, SemanticRole.leg_r,
+)
 
 
 def split_limb_segments(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
-    """Cut each arm into an upper-arm and a forearm segment, overlapping at the elbow, for a real
-    two-joint FK chain. Both segments keep the arm's role and share its texture (UVs pick the region —
-    nothing is written to disk); the forearm is drawn just above the upper arm so its proximal overlap
-    covers the joint seam. Mutates ``stack`` and ``meshes``; returns the ids created.
+    """Cut each arm and leg into an upper and a lower segment, overlapping at the joint (elbow / knee),
+    for a real two-link FK chain. Both segments keep the limb's role and share its texture (UVs pick the
+    region — nothing is written to disk); the lower segment is drawn just above the upper so its proximal
+    overlap covers the joint seam. Mutates ``stack`` and ``meshes``; returns the ids created.
 
     Idempotent: a segment (id ending in ``_up``/``_lo``) is never re-split.
     """
@@ -481,18 +489,18 @@ def split_limb_segments(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
         x0, y0, x1, y1 = _bbox(mesh.vertices)
         h = y1 - y0
         if h < _SEG_MIN_HEIGHT_FRAC * fig_h:
-            continue                                     # too small to be a real, articulable arm
-        cut = y1 - _SEG_ELBOW_FRAC * h                   # y-up: shoulder at y1 (top), wrist at y0
+            continue                                     # too small to be a real, articulable limb
+        cut = y1 - _SEG_ELBOW_FRAC * h                   # y-up: shoulder/hip at y1 (top), wrist/ankle at y0
         band = _SEG_OVERLAP_FRAC * h
-        # upper keeps everything from the shoulder down to just past the elbow; forearm keeps everything
-        # from the wrist up to just past the elbow — the [cut-band, cut+band] band is in both.
+        # upper keeps everything from the shoulder/hip down to just past the joint; lower keeps everything
+        # from the wrist/ankle up to just past the joint — the [cut-band, cut+band] band is in both.
         upper = [i for i, (_, vy) in enumerate(mesh.vertices) if vy >= cut - band]
         fore = [i for i, (_, vy) in enumerate(mesh.vertices) if vy <= cut + band]
         segs = _segment_meshes(mesh, layer.id, upper, fore)
         if segs is None:
             continue                                     # a triangle spans past the band, or a degenerate half
 
-        # forearm drawn just above the upper arm (its proximal overlap hides the elbow seam)
+        # lower segment drawn just above the upper (its proximal overlap hides the elbow/knee seam)
         halves = [
             Layer(id=f"{layer.id}{_SEG_SUFFIX[0]}", semantic_role=layer.semantic_role,
                   texture_path=layer.texture_path, draw_order=layer.draw_order,
@@ -514,7 +522,7 @@ def split_limb_segments(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
 def _segment_meshes(
     mesh: Mesh, base_id: str, upper: list[int], fore: list[int],
 ) -> tuple[Mesh, Mesh] | None:
-    """Two overlapping sub-meshes (upper, forearm) — or ``None`` if either is degenerate or a triangle
+    """Two overlapping sub-meshes (upper, lower) — or ``None`` if either is degenerate or a triangle
     falls outside both halves (which would leave a hole at the joint: the overlap band is too narrow)."""
     up = _sub_mesh(mesh, f"{base_id}{_SEG_SUFFIX[0]}", upper)
     lo = _sub_mesh(mesh, f"{base_id}{_SEG_SUFFIX[1]}", fore)

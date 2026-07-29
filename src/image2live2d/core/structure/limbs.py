@@ -253,6 +253,56 @@ def reassign_arm_mislabeled_as_leg(stack: LayerStack, meshes: list[Mesh]) -> lis
     return changed
 
 
+_LIMB_SIDE_PAIRS = ((SemanticRole.arm_l, SemanticRole.arm_r),
+                    (SemanticRole.leg_l, SemanticRole.leg_r))
+_SIDE_MARGIN_FRAC = 0.03     # a part must sit this far (×body width) past the midline to count as a side
+
+
+def reassign_mixed_limb_sides(stack: LayerStack, meshes: list[Mesh]) -> list[str]:
+    """When a limb ROLE holds parts on BOTH sides of the body midline, snap each part in that pair to the
+    role matching its own side (character-left = +x).
+
+    The decomposer sometimes splits one physical arm's sub-parts (e.g. a shoulder puff vs the arm) across
+    ``arm_l`` AND ``arm_r`` with the left/right swapped, so a single role ends up spanning the full width.
+    The limb rigging then unions those opposite-side parts into one 'limb' whose shoulder lands on one
+    side and wrist on the other — a full-width diagonal — and lower-body skirt tiers pass as 'wrist
+    riders'/overlap-followers and rigidly rotate with the arm (the magicalgirl skirt-drag under
+    arm-swing). Snapping each part to its geometric side keeps every limb role on one side.
+
+    A *clean* full L/R swap (every part of a role on one side, just mirror-named) is left alone: swing
+    direction is computed from geometry, not the label, so the swap is harmless and re-roling it is
+    needless churn. Mutates roles in ``stack``; returns the ids re-roled."""
+    mbp = {m.part_id: m for m in meshes}
+    all_verts = [v for m in meshes for v in m.vertices]
+    if not all_verts:
+        return []
+    x0, _, x1, _ = _bbox(all_verts)
+    head = [m for ly in stack.layers if (m := mbp.get(ly.id))
+            and ly.semantic_role in (SemanticRole.face_base, SemanticRole.neck)]
+    mid = _centroid([v for m in head for v in m.vertices])[0] if head else 0.5 * (x0 + x1)
+    margin = _SIDE_MARGIN_FRAC * max(x1 - x0, 1e-6)
+
+    def side(m: Mesh) -> int:                        # +1 character-left (+x), -1 character-right, 0 ambiguous
+        cx = _centroid(m.vertices)[0]
+        return 1 if cx > mid + margin else (-1 if cx < mid - margin else 0)
+
+    changed: list[str] = []
+    for lrole, rrole in _LIMB_SIDE_PAIRS:
+        members = [(ly, mbp[ly.id]) for ly in stack.layers
+                   if ly.semantic_role in (lrole, rrole) and ly.id in mbp]
+        # only act when a role straddles the midline (the mixed case that inflates the union)
+        mixed = any({side(m) for ly, m in members if ly.semantic_role is role} >= {-1, 1}
+                    for role in (lrole, rrole))
+        if not mixed:
+            continue
+        for ly, m in members:
+            want = lrole if side(m) > 0 else rrole if side(m) < 0 else ly.semantic_role
+            if want is not ly.semantic_role:
+                ly.semantic_role = want
+                changed.append(ly.id)
+    return changed
+
+
 def _leg_seam(mesh: Mesh, *, body_box) -> float | None:
     """The x of the seam between two fused legs — or ``None`` if this part is not a pair of legs.
 

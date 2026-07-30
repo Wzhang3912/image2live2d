@@ -331,7 +331,8 @@ def author_rig(
     strands = hair_strands(stack, meshes)
     for spec in strands:
         params.append(_hair_sway(spec.param_id, spec.part_id,
-                                 mesh_by_part[spec.part_id], spec.vertex_indices))
+                                 mesh_by_part[spec.part_id], spec.vertex_indices,
+                                 weights=spec.weights))
 
     # --- Hair BOUNCE (vertical), one param per hair ROLE (physics OUTPUT) ------------------------
     # The sway params above are horizontal-only, so a nod never bobs the hair through physics — it only
@@ -850,7 +851,7 @@ def _limb_bend(param_id: str, limb: list[tuple[str, Mesh]], elbow: Vec2, end: Ve
 
 
 def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | None = None,
-               *, amount: float = _HAIR_SWAY) -> Parameter:
+               *, amount: float = _HAIR_SWAY, weights: list[float] | None = None) -> Parameter:
     """Pendulum OUTPUT param for one hair strand: tips swing horizontally, roots (top) stay. The
     physics rig drives this from head/body motion; it is also a normal driveable parameter.
 
@@ -858,10 +859,21 @@ def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | Non
     vertices — the rest of the part is held at zero — so lobes of one part swing independently and the
     strand hangs from its *own* top. ``None`` sways the whole mesh (the single-lobe case).
 
+    ``weights`` (a vertical sub-strand column, see strands._column_weights) scales the sway per vertex
+    by a 0..1 weight over the whole mesh — the columns of a sheet partition unity, so summed they sway
+    the whole curtain, but each rides its own pendulum, so the sheet ripples rather than swinging rigid.
+
     The swing grows as ``depth ** _SWAY_TAPER`` — see that constant. A linear taper let the whole sheet
     shear, which slid a fringe off the forehead."""
     verts = mesh.vertices
-    owned = range(len(verts)) if indices is None else indices
+    if weights is not None:
+        owned: list[int] = [i for i in range(len(verts)) if weights[i] > 0.0]
+    elif indices is None:
+        owned = list(range(len(verts)))
+    else:
+        owned = list(indices)
+    if not owned:                                        # a column with no vertices — nothing to sway
+        return _tri(param_id, lambda sign: {part_id: [(0.0, 0.0)] * len(verts)})
     _, bottom, _, top = _bbox([verts[i] for i in owned])
     length = max(top - bottom, 1e-6)
 
@@ -870,7 +882,8 @@ def _hair_sway(param_id: str, part_id: str, mesh: Mesh, indices: list[int] | Non
         for vi in owned:
             _, y = verts[vi]
             depth = (top - y) / length                  # 0 at the root, 1 at the tip
-            cell[vi] = (sign * amount * length * depth ** _SWAY_TAPER, 0.0)
+            w = weights[vi] if weights is not None else 1.0
+            cell[vi] = (sign * amount * length * depth ** _SWAY_TAPER * w, 0.0)
         return {part_id: cell}
 
     return _tri(param_id, at)

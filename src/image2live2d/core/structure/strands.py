@@ -45,6 +45,57 @@ _TIP_MIN_PROMINENCE = 0.18   # a tip must dip this far (fraction of the bottom-e
 _TIP_MIN_SEPARATION = 6      # bins two tips must be apart — merges locks that are basically one
 _TIP_MAX = 6                 # never more than this many strands from one lobe
 
+# --- Vertical sub-strand columns ------------------------------------------------------------------
+# Even after tip-splitting, See-through usually hands hair back as WHOLE CURTAINS (a full-width back
+# sheet, a fringe) with no alpha gaps and no distinct bottom tips — so a lobe is one strand and the whole
+# sheet swings on ONE pendulum, reading like a rigid board. A real hair curtain has many physics chains
+# across its width. So a lobe wider than a couple of column-widths is split into overlapping vertical
+# COLUMNS: each column is its own pendulum, but the per-vertex sway weights form a partition of unity
+# (linear blend between adjacent column centres), so the sheet deforms smoothly — a travelling ripple,
+# not hard columns that tear. A small per-column length/mass gradient desyncs them so the ripple flows.
+# Only the wide, free-HANGING curtains get columns: back hair and side hair. The front fringe frames the
+# face and should sway as one piece (columns would fragment a bang line), and an already tip-split lock
+# (a tail/ponytail) is its own strand and isn't fragmented further.
+_COLUMN_ROLES = (SemanticRole.hair_back, SemanticRole.hair_side)
+_COLUMN_WIDTH = 0.13         # target column width (model units); a lobe wider than ~2x this is split
+_COLUMN_MAX = 5              # never more than this many columns from one lobe
+_COLUMN_DESYNC = 0.28        # per-column length/mass spread (gradient across x) so columns flow, not lockstep
+
+
+def _column_count(width: float) -> int:
+    """How many vertical columns a lobe of this x-width gets: 1 until it's ~2 column-widths, then one
+    per column-width, capped. Keeps a narrow tail/fringe a single strand (unchanged)."""
+    if width < 2.0 * _COLUMN_WIDTH:
+        return 1
+    return min(_COLUMN_MAX, max(2, round(width / _COLUMN_WIDTH)))
+
+
+def _column_weights(mesh: Mesh, indices: list[int], n: int) -> list[list[float]]:
+    """``n`` per-vertex weight arrays (over the WHOLE mesh) partitioning the lobe ``indices`` into
+    overlapping vertical columns. Column centres are evenly spaced across the lobe's x-extent; each
+    vertex splits its weight linearly between the two nearest centres (a hat-function partition of
+    unity), clamped at the ends. Vertices outside ``indices`` get 0 in every column."""
+    xs = [mesh.vertices[i][0] for i in indices]
+    x0, x1 = min(xs), max(xs)
+    span = max(x1 - x0, 1e-9)
+    centres = [x0 + (k + 0.5) / n * span for k in range(n)]
+    weights = [[0.0] * len(mesh.vertices) for _ in range(n)]
+    for i in indices:
+        x = mesh.vertices[i][0]
+        if x <= centres[0]:
+            weights[0][i] = 1.0
+        elif x >= centres[-1]:
+            weights[-1][i] = 1.0
+        else:
+            k = max(j for j in range(n) if centres[j] <= x)
+            t = (x - centres[k]) / (centres[k + 1] - centres[k])
+            weights[k][i] = 1.0 - t
+            weights[k + 1][i] = t
+    # Drop any column that captured no vertices (a sparse mesh can leave a middle column empty). Safe:
+    # a vertex only ever weights the two columns bracketing it, so both are non-empty — dropping an
+    # all-zero column keeps the remaining weights a partition of unity.
+    return [w for w in weights if any(v > 0.0 for v in w)]
+
 # Base pendulum tuning per hair role. These are exactly the pre-P2 physics._HAIR_TUNING values, so one
 # strand of a role reproduces the old physics rig verbatim: back hair heavy/slow, front fringe light.
 HAIR_BASE_TUNING: dict[SemanticRole, tuple[str, tuple[float, float, float]]] = {
@@ -71,6 +122,12 @@ class StrandSpec:
     drag: float
     length: float
     vertex_indices: list[int] | None = None
+    # Per-vertex sway weight over the WHOLE part mesh (0..1), for a *vertical sub-strand column* of a wide
+    # sheet. See core.structure.strands._column_weights: a curtain wider than a couple of column-widths is
+    # split into overlapping columns whose weights form a partition of unity, so each column gets its own
+    # pendulum yet the sheet deforms smoothly (a travelling ripple) with no tear line between columns.
+    # ``None`` = the strand sways uniformly over its ``vertex_indices`` (a lone lobe/tail), unchanged.
+    weights: list[float] | None = None
 
 
 def _height_of(verts: list[Vec2]) -> float:
@@ -236,35 +293,48 @@ def hair_strands(stack: LayerStack, meshes: list[Mesh]) -> list[StrandSpec]:
     owning its lobe's vertices. Mass/length scale with each strand's height vs its role's mean (factor
     1.0 for a lone/average strand → base tuning unchanged)."""
     mbp = {m.part_id: m for m in meshes}
-    # (part_id, vertex_indices|None, height) per strand unit, grouped by role in stack order.
-    units: dict[SemanticRole, list[tuple[str, list[int] | None, float]]] = defaultdict(list)
+    # (part_id, sway_indices|None, weights|None, height, desync) per strand unit, grouped by role.
+    units: dict[SemanticRole, list[tuple[str, list[int] | None, list[float] | None, float, float]]] = \
+        defaultdict(list)
     for ly in stack.layers:
         if ly.semantic_role not in HAIR_BASE_TUNING or ly.id not in mbp:
             continue
         m = mbp[ly.id]
         # First split by connected components (alpha gaps: twin-tails fused into one layer), then split
-        # each connected lobe again by its bottom-contour tips (locks with no gap between them).
+        # each connected lobe by its bottom-contour tips (locks with no gap), then split a wide lobe into
+        # overlapping vertical COLUMNS (a curtain rippling on several pendulums, not one rigid board).
         sublobes: list[list[int]] = []
         for comp in mesh_components(m):
             sublobes.extend(split_lobe_by_tips(m, comp))
-        if len(sublobes) <= 1:
-            units[ly.semantic_role].append((ly.id, None, _height_of(m.vertices)))
-        else:
-            for sub in sublobes:
-                h = _height_of([m.vertices[i] for i in sub])
-                units[ly.semantic_role].append((ly.id, sub, h))
+        multi = len(sublobes) > 1
+        may_column = (ly.semantic_role in _COLUMN_ROLES) and not multi   # only a single wide curtain
+        for sub in sublobes:
+            h = _height_of([m.vertices[i] for i in sub])
+            idx = sub if multi else None                 # bounce reference; None = the whole single lobe
+            xs = [m.vertices[i][0] for i in sub]
+            n = _column_count(max(xs) - min(xs)) if may_column else 1
+            cols = _column_weights(m, sub, n) if n > 1 else []
+            if len(cols) <= 1:                           # narrow, or collapsed to one non-empty column
+                units[ly.semantic_role].append((ly.id, idx, None, h, 1.0))
+            else:
+                nc = len(cols)
+                for k, w in enumerate(cols):
+                    desync = 1.0 + _COLUMN_DESYNC * (k / (nc - 1) - 0.5)   # gradient -> travelling ripple
+                    units[ly.semantic_role].append((ly.id, idx, w, h, desync))
 
     specs: list[StrandSpec] = []
     for role, (base, (m0, d0, l0)) in HAIR_BASE_TUNING.items():
         role_units = units.get(role)
         if not role_units:
             continue
-        heights = [h for _, _, h in role_units]
+        heights = [h for _, _, _, h, _ in role_units]
         mean = sum(heights) / len(heights)
-        for i, (pid, indices, h) in enumerate(role_units):
+        for i, (pid, indices, weights, h, desync) in enumerate(role_units):
             f = (h / mean) if mean > 0 else 1.0
-            specs.append(StrandSpec(part_id=pid, param_id=strand_param_id(base, i), role=role,
-                                    mass=m0 * f, drag=d0, length=l0 * f, vertex_indices=indices))
+            specs.append(StrandSpec(
+                part_id=pid, param_id=strand_param_id(base, i), role=role,
+                mass=m0 * f * desync, drag=d0, length=l0 * f * desync,
+                vertex_indices=indices, weights=weights))
     return specs
 
 

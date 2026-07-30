@@ -19,6 +19,7 @@ from .core.structure import (
     normalize_face_zorder,
     normalize_leg_zorder,
     reassign_arm_mislabeled_as_leg,
+    reassign_mixed_limb_sides,
     split_bundled_pairs,
     split_fused_legs,
     split_limb_segments,
@@ -70,6 +71,7 @@ def prepare_meshes(stack: LayerStack):
     reassign_arm_mislabeled_as_leg(stack, meshes)  # arms the decomposer labelled 'leg' -> arm role
     split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
     split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
+    reassign_mixed_limb_sides(stack, meshes) # a split half whose L/R was assigned backwards -> snap to geometry
     split_limb_segments(stack, meshes)       # cut each arm/leg at the elbow/knee -> two-link FK segments
     _lift_occluded_accessories(stack, meshes)
     normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen

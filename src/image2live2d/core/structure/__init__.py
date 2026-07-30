@@ -67,6 +67,7 @@ from .strands import (
 )
 from .limbs import (
     reassign_arm_mislabeled_as_leg,
+    reassign_mixed_limb_sides,
     split_bundled_pairs,
     split_fused_legs,
     split_limb_segments,
@@ -131,6 +132,7 @@ __all__ = [
     "normalize_face_zorder",
     "normalize_leg_zorder",
     "reassign_arm_mislabeled_as_leg",
+    "reassign_mixed_limb_sides",
     "split_bundled_pairs",
     "split_fused_legs",
     "split_limb_segments",

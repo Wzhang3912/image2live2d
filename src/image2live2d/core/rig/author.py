@@ -182,6 +182,14 @@ _DEFORM_CAP = 0.28    # final safety net: no keyform may shift any vertex more t
 #                       remaining magnitude runaways (blink/hair/cloth/brow) when See-through emits an
 #                       oversized eye/hair layer, without touching well-formed motion (all < ~0.22).
 _BREATH_SHIFT = 0.008 # crown's upward bob (model units) at breath 1; tapers to 0 at the feet (see _breath)
+# --- Chest/bust (R1): a subtle soft-tissue bounce on the front bodice, driven by a body-sway pendulum.
+# Deliberately a small vertical TRANSLATE weighted by a smooth bump over the bust region, NOT a bulge/
+# scale — so it reads as natural give on a bust and is a harmless breath-like shift on a flat/male chest
+# (the guardrail: a wrong synthetic part is worse than a missing one, so we keep it subtle + translate-only).
+_BUST_SHIFT = 0.016      # vertical bounce amplitude (model units) at the extreme
+_BUST_DROP = 0.105       # bust centre sits this far below the shoulder line (model units)
+_BUST_RX_FRAC = 0.38     # horizontal radius of the bust region, as a fraction of the shoulder span
+_BUST_RY = 0.090         # vertical radius of the bust region (model units)
 _ARM_DEG = 24.0       # arm swing degrees about the shoulder joint at the extreme. Larger than the old
 #                       14deg now that the arm is a rigid FK chain (see the limb loop): the segments
 #                       don't shear, so the swing is limited only by the arm/torso shoulder seam.
@@ -466,6 +474,12 @@ def author_rig(
             params.append(_rotation(bend_id, forearm + riders, elbow, deg=bend_deg * side))
         else:
             params.append(_limb_bend(bend_id, limb, elbow, end, deg=bend_deg * side))   # soft fold
+
+    # --- Chest/bust bounce (physics OUTPUT), when a chest region can be located on a front bodice ----
+    bust = _bust_region(stack, mesh_by_part, lm, _mid_x, _draw)
+    if bust is not None:
+        bodice_id, center, radius = bust
+        params.append(_bust("ParamBustY", bodice_id, mesh_by_part[bodice_id], center, radius))
 
     # --- Breath (subtle whole-character bob) ----------------------------------------------------
     all_parts = [
@@ -993,6 +1007,55 @@ def _breath(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
         pid: [(0.0, _BREATH_SHIFT * _clamp((y - y0) / span, 0.0, 1.0)) for _, y in m.vertices]
         for pid, m in group})
     return _set_keyforms(param_id, [rest, inhale])
+
+
+def _bust_region(stack, mesh_by_part, lm, mid_x, draw):
+    """Locate the chest region: ``(bodice_id, (cx, cy), (rx, ry))`` or ``None``.
+
+    Needs both shoulder joints (from landmarks) to place the region below-and-between them. The bodice is
+    the FRONT-MOST clothing part whose bbox contains the bust centre and spans a good part of the shoulder
+    width (a top/dress, not a small charm). Returns ``None`` (no bust authored) when either is missing —
+    the conservative default."""
+    sl, sr = lm.joints.get("arm_l"), lm.joints.get("arm_r")
+    if sl is None or sr is None:
+        return None
+    cx = 0.5 * (sl[0] + sr[0])
+    span = abs(sl[0] - sr[0])
+    if span < 1e-3:
+        return None
+    cy = 0.5 * (sl[1] + sr[1]) - _BUST_DROP
+    rx, ry = _BUST_RX_FRAC * span, _BUST_RY
+    best = None
+    for layer in stack.layers:
+        if layer.semantic_role is not SemanticRole.clothing or layer.id not in mesh_by_part:
+            continue
+        m = mesh_by_part[layer.id]
+        x0, y0, x1, y1 = _bbox(m.vertices)
+        if x0 <= cx <= x1 and y0 <= cy <= y1 and (x1 - x0) >= 0.5 * span:   # covers the chest, torso-wide
+            d = draw.get(layer.id, 0)
+            if best is None or d > best[1]:
+                best = (layer.id, d)
+    return None if best is None else (best[0], (cx, cy), (rx, ry))
+
+
+def _bust(param_id: str, bodice_id: str, mesh: Mesh, center: Vec2, radius: Vec2) -> Parameter:
+    """Subtle bust bounce OUTPUT param: vertices in an elliptical region of the front bodice translate
+    VERTICALLY, weighted by a smooth bump peaking at the bust centre and tapering to 0 at the region edge
+    — a soft-tissue lag driven by a body-sway pendulum. A translate (not a bulge), so it is natural on a
+    bust and a harmless breath-like shift on a flat chest."""
+    cx, cy = center
+    rx, ry = max(radius[0], 1e-6), max(radius[1], 1e-6)
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        cell: list[Vec2] = [(0.0, 0.0)] * len(mesh.vertices)
+        for i, (x, y) in enumerate(mesh.vertices):
+            dx, dy = (x - cx) / rx, (y - cy) / ry
+            d2 = dx * dx + dy * dy
+            if d2 < 1.0:
+                cell[i] = (0.0, sign * _BUST_SHIFT * (1.0 - d2))   # smooth bump: 1 at centre -> 0 at edge
+        return {bodice_id: cell}
+
+    return _tri(param_id, at)
 
 
 def _eyeball(

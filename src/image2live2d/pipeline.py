@@ -72,7 +72,7 @@ def prepare_meshes(stack: LayerStack):
     split_bundled_pairs(stack, meshes)       # both arms in one layer can only ever move as one sheet
     split_fused_legs(stack, meshes)          # ...and the legs are fused at the hips, so cut them
     reassign_mixed_limb_sides(stack, meshes) # a split half whose L/R was assigned backwards -> snap to geometry
-    split_limb_segments(stack, meshes)       # cut each arm at the elbow -> upper+forearm FK segments
+    split_limb_segments(stack, meshes)       # cut each arm/leg at the elbow/knee -> two-link FK segments
     _lift_occluded_accessories(stack, meshes)
     normalize_face_zorder(stack, meshes)     # a brow buried under the skin/fringe can never be seen
     normalize_leg_zorder(stack, meshes)      # a leg cut at the hemline shouldn't paint over the skirt

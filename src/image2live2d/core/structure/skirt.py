@@ -119,6 +119,10 @@ class ZoneSpec:
     mass: float = 1.0
     drag: float = 0.25
     length: float = 1.3
+    # The specific skirt TIER (clothing part) this zone drives; ``None`` = the whole skirt group (the
+    # mesh-less physics path). A layered skirt gives each tier its own zones so they ripple on their
+    # own phase instead of the whole stack moving as one — see skirt_zones.
+    part_id: str | None = None
 
 
 def _clamp(v: float, lo: float, hi: float) -> float:
@@ -218,21 +222,35 @@ def skirt_zones(stack: LayerStack, meshes: list[Mesh]) -> list[ZoneSpec]:
     cloth = skirt_cloth(stack, meshes)
     if not cloth:
         return []
-    boxes = [_bbox(m.vertices) for _, m in cloth]
-    cx0 = min(b[0] for b in boxes)
-    cx1 = max(b[2] for b in boxes)
-    cy0 = min(b[1] for b in boxes)
-    cy1 = max(b[3] for b in boxes)
-    span = max(cx1 - cx0, 1e-6)
-    hang = cy1 - cy0
-    area = span * hang
-    n = _zone_count(span)
-    half_w = span / n                        # overlapping windows (each 2*span/n wide) for continuity
+    # A layered/tiered skirt (ruffles) arrives as several skirtable parts stacked vertically. The old
+    # plan unioned them and drove every tier with the SAME L/C/R params, so the whole stack swung as one.
+    # Instead: the PRIMARY tier (largest area — the main skirt) keeps the width-scaled L/C/R(+interior)
+    # zones scoped to its own part; each EXTRA tier gets one independent central sway (ParamSkirtT1, T2…)
+    # scoped to its part, so a ruffle layer ripples on its own phase. A single-tier skirt is unchanged
+    # (one part = the primary, its zones scoped to it = the old output verbatim).
+    def _area(m: Mesh) -> float:
+        x0, y0, x1, y1 = _bbox(m.vertices)
+        return (x1 - x0) * (y1 - y0)
+    primary = max(range(len(cloth)), key=lambda i: _area(cloth[i][1]))
     zones: list[ZoneSpec] = []
-    for i, (pid, drivers, base) in enumerate(_zone_layout(n)):
-        center_x = cx0 + span * (i + 0.5) / n
-        mass, drag, length = material_from_geometry(base, hang, area)
-        zones.append(ZoneSpec(pid, center_x, half_w, drivers, mass, drag, length))
+    tier_k = 0
+    for i, (pid, m) in enumerate(cloth):
+        x0, y0, x1, y1 = _bbox(m.vertices)
+        span = max(x1 - x0, 1e-6)
+        hang = y1 - y0
+        area = span * hang
+        if i == primary:
+            n = _zone_count(span)
+            half_w = span / n                # overlapping windows (each 2*span/n wide) for continuity
+            for j, (zpid, drivers, base) in enumerate(_zone_layout(n)):
+                center_x = x0 + span * (j + 0.5) / n
+                mass, drag, length = material_from_geometry(base, hang, area)
+                zones.append(ZoneSpec(zpid, center_x, half_w, drivers, mass, drag, length, part_id=pid))
+        else:
+            tier_k += 1
+            mass, drag, length = material_from_geometry(_INTERIOR_BASE, hang, area)
+            zones.append(ZoneSpec(f"ParamSkirtT{tier_k}", 0.5 * (x0 + x1), span,
+                                  list(_INTERIOR_DRIVERS), mass, drag, length, part_id=pid))
     return zones
 
 
@@ -251,4 +269,8 @@ def skirt_specs_from_params(param_ids) -> list[ZoneSpec]:
         k += 1
     if "ParamSkirtR" in ids:
         out.append(ZoneSpec("ParamSkirtR", 0.0, 0.0, list(_EDGE_DRIVERS_R), *_EDGE_BASE))
+    t = 1                                     # extra tiers of a layered skirt (ParamSkirtT1, T2 …)
+    while f"ParamSkirtT{t}" in ids:
+        out.append(ZoneSpec(f"ParamSkirtT{t}", 0.0, 0.0, list(_INTERIOR_DRIVERS), *_INTERIOR_BASE))
+        t += 1
     return out

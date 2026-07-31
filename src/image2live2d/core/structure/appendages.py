@@ -39,6 +39,14 @@ _ACC_TUNING = (0.9, 0.14, 0.9)
 # a longer arc, floppier (higher drag) so it lags and settles like fabric rather than a light trinket.
 _GARMENT_TUNING = (1.2, 0.20, 1.1)
 
+# An animal TAIL (cat/fox) is a long, heavy appendage that hangs from the hips and swings in a big lazy
+# arc — very different from a light ear-stud dangle. Heavier + longer + low drag so it lags the body and
+# has a long free follow-through; always driven by the BODY (a tail hangs off the hips, not the head).
+_TAIL_TUNING = (1.7, 0.13, 1.6)
+_TAIL_MIN_HEIGHT = 0.15     # a tail spans at least this fraction of the canvas height...
+_TAIL_MAX_CY = 0.60         # ...and hangs in the lower/mid body (centroid at or below this, y-up) — this
+#                             is what tells a hip-hung tail from a head ornament (ears/pins sit high).
+
 # Per parent group: (primary driver, extra drivers). A head ornament rides the head turn; a body
 # ornament the body sway; a sleeve/cuff rides its ARM's articulation (swing about the shoulder as the
 # primary driver, the elbow bend as an extra) so it lags and flares off the arm instead of the torso.
@@ -64,6 +72,7 @@ class AppendageSpec:
     mass: float = _ACC_TUNING[0]
     drag: float = _ACC_TUNING[1]
     length: float = _ACC_TUNING[2]
+    is_tail: bool = False        # an animal tail: authored with a bigger swing arc than an ornament
 
 
 def accessory_appendages(stack: LayerStack, meshes: list[Mesh], graph: RigGraph) -> list[AppendageSpec]:
@@ -71,20 +80,35 @@ def accessory_appendages(stack: LayerStack, meshes: list[Mesh], graph: RigGraph)
     order. Param ids are ``ParamAcc0``, ``ParamAcc1``, … (only parented accessories consume an index,
     so ``author_rig`` and ``generate_physics`` — both calling this — always agree). An accessory with
     no head/body to ride is skipped (nothing to drive its sway)."""
-    meshed = {m.part_id for m in meshes}
+    mesh_by_part = {m.part_id: m for m in meshes}
     specs: list[AppendageSpec] = []
     n = 0
     for ly in stack.layers:
-        if ly.semantic_role is not SemanticRole.accessory or ly.id not in meshed:
+        if ly.semantic_role is not SemanticRole.accessory or ly.id not in mesh_by_part:
             continue
         cfg = _PARENT_CFG.get(graph.parent_of(ly.id))
         if cfg is None:
             continue
-        driver, extras = cfg
-        m0, d0, l0 = _ACC_TUNING
-        specs.append(AppendageSpec(ly.id, f"ParamAcc{n}", driver, list(extras), m0, d0, l0))
+        tail = _is_tail(mesh_by_part[ly.id])
+        if tail:
+            driver, extras = _PARENT_CFG[BODY]      # a tail hangs off the hips -> body-driven, heavy
+            m0, d0, l0 = _TAIL_TUNING
+        else:
+            driver, extras = cfg
+            m0, d0, l0 = _ACC_TUNING
+        specs.append(AppendageSpec(ly.id, f"ParamAcc{n}", driver, list(extras), m0, d0, l0, is_tail=tail))
         n += 1
     return specs
+
+
+def _is_tail(mesh: Mesh) -> bool:
+    """A long appendage hanging in the lower/mid body — an animal tail, not a head ornament."""
+    ys = [y for _, y in mesh.vertices]
+    if not ys:
+        return False
+    height = max(ys) - min(ys)
+    cy = sum(ys) / len(ys)
+    return height >= _TAIL_MIN_HEIGHT and cy <= _TAIL_MAX_CY
 
 
 def garment_appendages(

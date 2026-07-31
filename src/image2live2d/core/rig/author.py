@@ -142,6 +142,7 @@ _HAIR_BOUNCE = 0.10   # hair-tip VERTICAL drop as fraction of strand length at +
 #                       secondary bob; slightly gentler than the horizontal sway so a nod reads as a
 #                       settle, not a lurch. Driven by pitch through physics (see _hair_bounce).
 _ACC_SWAY = 0.15      # accessory dangle: gentler than hair (an ornament sways subtly off its mount)
+_TAIL_SWAY = 0.40     # an animal tail swings in a much bigger arc than a trinket (heavy, free-swinging)
 _GARMENT_SWAY = 0.20  # cape/sleeve dangle: between an ornament and a skirt hem (a bigger sheet of cloth)
 _CLOTH_SWAY = 0.30    # skirt-hem swing as fraction of garment height at +-1 (waist stays)
 _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
@@ -369,8 +370,8 @@ def author_rig(
     # Each accessory the graph bound to the head/body also gets a gentle pendulum, so a dangling
     # ornament swings as secondary motion (driven, in physics, by that same parent's turn/sway).
     for spec in accessory_appendages(stack, meshes, graph):
-        params.append(_hair_sway(spec.param_id, spec.part_id,
-                                 mesh_by_part[spec.part_id], None, amount=_ACC_SWAY))
+        params.append(_hair_sway(spec.param_id, spec.part_id, mesh_by_part[spec.part_id], None,
+                                 amount=_TAIL_SWAY if spec.is_tail else _ACC_SWAY))
 
     # --- Garment appendage sway (physics OUTPUT params) -----------------------------------------
     # A clothing part that hangs free (cape, long sleeve, coattail) — told from a rigid bodice by the

@@ -359,8 +359,11 @@ def author_rig(
     # skirt planner (core.structure.skirt); the pendulum *material* is geometry-scaled there and read
     # by generate_physics. The sway keyform windows are unchanged, so this is byte-identical here.
     cloth = skirt_cloth(stack, meshes)
+    cloth_by_id = dict(cloth)
     for z in skirt_zones(stack, meshes):
-        params.append(_skirt_zone(z.param_id, cloth, center_x=z.center_x, half_width=z.half_width))
+        # a per-tier zone drives only its own tier's part; the base L/C/R zones drive their tier too
+        group = [(z.part_id, cloth_by_id[z.part_id])] if z.part_id in cloth_by_id else cloth
+        params.append(_skirt_zone(z.param_id, group, center_x=z.center_x, half_width=z.half_width))
 
     # --- Accessory dangle (physics OUTPUT params) -----------------------------------------------
     # Each accessory the graph bound to the head/body also gets a gentle pendulum, so a dangling

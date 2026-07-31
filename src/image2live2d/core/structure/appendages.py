@@ -29,7 +29,7 @@ from ..types import LayerStack
 from ...irr.schema import Mesh, SemanticRole
 from .dynamics import DynamicsVerdict, analyze_meshes
 from .graph import ARM_L, ARM_R, BODY, HEAD, RigGraph
-from .skirt import _skirtable
+from .skirt import _bbox, _skirtable
 
 # Gentle light pendulum base for an ornament (mass, drag, length): quick to react, short arc, quick to
 # settle — an accessory is small and should read as a subtle dangle, never a flapping flag.
@@ -124,9 +124,11 @@ def garment_appendages(
     author_rig + generate_physics; otherwise it is computed here. The mesh scan only runs when at least
     one non-skirt clothing candidate exists, so hair/accessory-only characters pay nothing."""
     mesh_by_part = {m.part_id: m for m in meshes}
-    candidates = [ly for ly in stack.layers
-                  if ly.semantic_role is SemanticRole.clothing and ly.id in mesh_by_part
-                  and not _skirtable(mesh_by_part[ly.id])]
+    all_verts = [v for m in meshes for v in m.vertices]
+    body_box = _bbox(all_verts) if all_verts else None       # same figure box skirt_cloth uses, so a
+    candidates = [ly for ly in stack.layers                   # flared gown is owned by the skirt planner,
+                  if ly.semantic_role is SemanticRole.clothing and ly.id in mesh_by_part  # not double-
+                  and not _skirtable(mesh_by_part[ly.id], body_box=body_box)]             # counted here
     if not candidates:
         return []
     dyn = dynamics if dynamics is not None else {d.part_id: d for d in analyze_meshes(stack, meshes)}

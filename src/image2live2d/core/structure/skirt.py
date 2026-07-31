@@ -21,12 +21,24 @@ from dataclasses import dataclass, field
 
 from ..types import LayerStack
 from ...irr.schema import Mesh, SemanticRole, Vec2
+from .limbs import _leg_seam
 
 # A clothing part is treated as a swingable skirt hem unless its geometry says otherwise (thresholds
 # moved verbatim from rig.author; model space is y up, normalized to the canvas).
 _FOOTWEAR_TOP_Y = 0.28   # top below this -> footwear at the feet, not a hem
 _CLOTH_HEM_MIN_Y = 0.20  # bundled skirt+legs (waist -> feet) if it starts low AND reaches the waist
 _CLOTH_WAIST_Y = 0.45    # a part sitting entirely at/above this is a top/shirt (rides the body rigidly)
+
+# A waist->feet clothing part is EITHER a floor-length gown / A-line skirt (which should ripple as a
+# multi-zone hem) or a pair of legs / pants (which must NOT sway as cloth). They are told apart by shape:
+# a gown flares OUT to a wide continuous hem, while pants taper to two narrow leg columns. We require a
+# real outward flare (hem markedly wider than the thigh band) and a substantial hem, plus — as cheap
+# insurance — no detectable inter-leg seam (a strap dangling down the crotch can defeat the seam test on
+# its own, e.g. cargo pants, which is exactly why the flare test is the primary gate). Tuned against the
+# corpus: gowns flare >=1.17 (kimono) up to 1.75, pants sit at ~0.86; narrow front panels are ~0.13-0.16
+# wide and never reach the hem-width floor.
+_GOWN_FLARE_MIN = 1.15       # hem width / thigh-band width; below this it tapers (pants/leggings)
+_GOWN_HEM_MIN_WIDTH = 0.25   # a real gown hem is a wide sweep, not a thin apron/sash panel
 
 # Reference garment (normalized) at which the base tuning holds; real garments scale relative to it.
 _REF_HANG = 0.22
@@ -142,23 +154,63 @@ def material_from_geometry(
     return (mass, drag, length)
 
 
-def _skirtable(mesh: Mesh) -> bool:
+def _band_width(verts: list[Vec2], y_lo: float, y_hi: float) -> float:
+    """Horizontal extent of the vertices lying in the [y_lo, y_hi] band (0 if the band is empty)."""
+    xs = [x for x, y in verts if y_lo <= y <= y_hi]
+    return (max(xs) - min(xs)) if xs else 0.0
+
+
+def _gown_hem(mesh: Mesh, body_box) -> bool:
+    """True if a waist->feet clothing part reads as a floor-length gown / A-line skirt (a wide, flared,
+    continuous hem) rather than legs / pants (two tapering columns). A gown's hem band is markedly wider
+    than its thigh band and spans a real sweep; a seam down the midline (a crotch gap) rules it out.
+
+    ``body_box`` is the whole-figure bounding box (as ``split_fused_legs`` uses), needed by the seam
+    guard; without it we cannot safely tell a gown from bundled legs, so the caller stays conservative."""
+    if body_box is None:
+        return False
+    verts = mesh.vertices
+    ys = [y for _, y in verts]
+    if not ys:
+        return False
+    y0, y1 = min(ys), max(ys)
+    h = y1 - y0
+    if h <= 0:
+        return False
+    bot = _band_width(verts, y0, y0 + 0.15 * h)              # hem band (near the floor)
+    mid = _band_width(verts, y0 + 0.45 * h, y0 + 0.65 * h)   # thigh / mid band
+    if mid <= 0 or bot < _GOWN_HEM_MIN_WIDTH:
+        return False
+    if bot / mid < _GOWN_FLARE_MIN:
+        return False                                         # tapers / columnar -> pants, not a gown
+    return _leg_seam(mesh, body_box=body_box) is None        # a real inter-leg seam -> bundled legs
+
+
+def _skirtable(mesh: Mesh, *, body_box=None) -> bool:
     x0, y0, x1, y1 = _bbox(mesh.vertices)   # y up: y0 bottom, y1 top
     if y1 < _FOOTWEAR_TOP_Y:
         return False                        # footwear (entirely at the feet)
     if y0 < _CLOTH_HEM_MIN_Y and y1 >= _CLOTH_WAIST_Y:
-        return False                        # bundled skirt+legs (waist -> feet)
+        # Waist -> feet: bundled legs / pants, UNLESS it reads as a flared gown hem. Without a body_box
+        # we can't run the gown test, so we stay conservative (reject) — keeping the pre-gown behavior
+        # byte-for-byte for any caller that doesn't thread the figure box through.
+        if not _gown_hem(mesh, body_box):
+            return False
     if y0 >= _CLOTH_WAIST_Y:
         return False                        # a top/shirt: rides the body, no hem to swing
     return True
 
 
 def skirt_cloth(stack: LayerStack, meshes: list[Mesh]) -> list[tuple[str, Mesh]]:
-    """The clothing parts that read as a swingable skirt hem, in stack order."""
+    """The clothing parts that read as a swingable skirt hem, in stack order. A floor-length gown / A-line
+    skirt (a waist->feet clothing part that flares to a wide hem) counts too; legs / pants do not."""
     mbp = {m.part_id: m for m in meshes}
+    all_verts = [v for m in meshes for v in m.vertices]
+    body_box = _bbox(all_verts) if all_verts else None
     out: list[tuple[str, Mesh]] = []
     for ly in stack.layers:
-        if ly.semantic_role is SemanticRole.clothing and ly.id in mbp and _skirtable(mbp[ly.id]):
+        if (ly.semantic_role is SemanticRole.clothing and ly.id in mbp
+                and _skirtable(mbp[ly.id], body_box=body_box)):
             out.append((ly.id, mbp[ly.id]))
     return out
 

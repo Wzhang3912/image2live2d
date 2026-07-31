@@ -171,6 +171,14 @@ _BLINK = 0.85         # collapse toward the lid line at 0 — *not* all the way.
 #                       keeps 14.6% of its open height at ParamEyeLOpen=0 (several keep 90-100%). The
 #                       residual here is what remains visible as the closed-eye lid line.
 
+# Eye-smile (happy squint "^"): the eye closes onto an UPWARD-ARCHED lid line (peak at the eye centre,
+# falling to the lid axis at the corners) instead of the flat line a blink collapses to, so a shut
+# smiling eye reads as the caret curve, not a blink. _EYE_SMILE is the collapse strength (same residual
+# rationale as _BLINK — never fully degenerate the eye); _SMILE_ARCH is the peak lift as a fraction of
+# the eye's own height.
+_EYE_SMILE = 0.85
+_SMILE_ARCH = 0.32
+
 # Absolute displacement caps (model units, canvas ~= 1.0) that bound runaway warps on pathological
 # silhouettes — far below QA's 0.6 runaway gate, far above normal motion (head-turn ~0.14, mouth
 # ~0.05), so well-formed characters are untouched. See edge-case limit report (2026-06-30):
@@ -256,6 +264,15 @@ def author_rig(
         axis_y = lm.eye_r.center[1] if lm.eye_r else None
         params.append(_blink("ParamEyeROpen", right_eye,
                              members(SemanticRole.eye_closed_r), axis_y=axis_y))
+
+    # --- Eye smile (happy squint "^") -----------------------------------------------------------
+    # Standard IDs (ParamEyeL/RSmile) so VTS/ARKit bind them. Eye-only: collapse the eye group onto an
+    # upward-arched lid line (see _eye_smile). Dimensions come from the eye landmark; without one we
+    # fall back to the group's own bbox so a landmark-less portrait still gets a plausible arch.
+    if left_eye:
+        params.append(_eye_smile("ParamEyeLSmile", left_eye, lm.eye_l))
+    if right_eye:
+        params.append(_eye_smile("ParamEyeRSmile", right_eye, lm.eye_r))
 
     # --- Mouth open -----------------------------------------------------------------------------
     mouth = members(SemanticRole.mouth)
@@ -687,6 +704,38 @@ def _blink(param_id: str, group: list[tuple[str, Mesh]],
     closed_kf = Keyform(value=0.0, mesh_offsets=closed_off, opacity_overrides=closed_op)
     open_kf = Keyform(value=1.0, mesh_offsets=open_off, opacity_overrides=open_op)
     return _set_keyforms(param_id, [closed_kf, open_kf])
+
+
+def _eye_smile(param_id: str, group: list[tuple[str, Mesh]], eye_lm=None) -> Parameter:
+    """Happy squint "^": rest (0) = open; active (1) = the eye group collapsed onto an UPWARD-ARCHED lid
+    line whose peak sits ``_SMILE_ARCH`` of the eye's height above the lid axis at the eye centre and
+    falls to the axis at the corners. Unlike a blink (a flat collapse) this leaves a caret-shaped sliver,
+    which is what a smiling eye is drawn as. Eye dimensions come from ``eye_lm`` (landmark); without one
+    they come from the group's own bounding box, so a landmark-less portrait still arches sensibly."""
+    xs = [x for _, m in group for x, _ in m.vertices]
+    ys = [y for _, m in group for _, y in m.vertices]
+    if eye_lm is not None:
+        cx, axis_y = eye_lm.center
+        half_w = max(eye_lm.width / 2.0, 1e-6)
+        eye_h = eye_lm.height
+    else:
+        cx = (min(xs) + max(xs)) / 2.0
+        axis_y = (min(ys) + max(ys)) / 2.0
+        half_w = max((max(xs) - min(xs)) / 2.0, 1e-6)
+        eye_h = max(ys) - min(ys)
+    arch = _SMILE_ARCH * eye_h
+
+    def arc(m: Mesh) -> list[Vec2]:
+        out: list[Vec2] = []
+        for x, y in m.vertices:
+            taper = max(0.0, 1.0 - abs(x - cx) / half_w)   # 1 at the eye centre -> 0 at/beyond the corners
+            target = axis_y + arch * taper                 # the arched lid line
+            out.append((0.0, (target - y) * _EYE_SMILE))
+        return out
+
+    rest = Keyform(value=0.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
+    smiled = Keyform(value=1.0, mesh_offsets={pid: arc(m) for pid, m in group})
+    return _set_keyforms(param_id, [rest, smiled])
 
 
 def _mouth_open(

@@ -196,6 +196,10 @@ _DRIVES: dict[str, Drive] = {
                   note="the mouth must actually open — a cavity, teeth and tongue behind the lips"),
     "smirk": Drive({"ParamMouthForm": 1.0},
                    note="corners up and down without the lips tearing from the face"),
+    "smile": Drive({"ParamEyeLSmile": 1.0, "ParamEyeRSmile": 1.0, "ParamMouthForm": 1.0},
+                   cycles=2, hold=10, settle=20,
+                   note="a happy squint: the eyes close onto an upward '^' arc while the mouth curves up, "
+                        "the eye never flattening to a plain blink"),
     "look": Drive({"ParamEyeBallX": 1.0, "ParamEyeBallY": 1.0},
                   note="pupils travel inside the eye and never cross the lid"),
     "blink": Drive({"ParamEyeLOpen": -1.0, "ParamEyeROpen": -1.0}, cycles=2, hold=6, settle=20,

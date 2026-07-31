@@ -96,6 +96,14 @@ def generate_physics(
                 mass=z.mass, drag=z.drag, length=z.length,
             ))
 
+    # Chest/bust bounce: a light, quick-settling pendulum driven by body sway (+ bow), so any body
+    # motion gives the chest a subtle soft-tissue lag. Only present when author_rig located a bust region.
+    if "ParamBustY" in param_ids and _BODY_DRIVER in param_ids:
+        extras = [e for e in ("ParamBodyAngleY", "ParamAngleY") if e in param_ids]
+        rigs.append(PhysicsRig(id="phys_ParamBustY", driver_param=_BODY_DRIVER,
+                               output_param="ParamBustY", extra_drivers=extras,
+                               mass=0.9, drag=0.45, length=0.28))
+
     # Accessory dangles: one pendulum per ornament, driven by the parent (head/body) the graph bound
     # it to. Needs meshes to build the graph; the ids/drivers match author_rig's accessory sway params.
     if meshes is not None:

@@ -48,6 +48,9 @@ _PHYSICS_PARAM_SPECS: list[tuple[str, float, float, float]] = [
     ("ParamSkirtL", -1.0, 1.0, 0.0),
     ("ParamSkirtC", -1.0, 1.0, 0.0),
     ("ParamSkirtR", -1.0, 1.0, 0.0),
+    # Chest/bust: a subtle vertical soft-tissue bounce on the front bodice, driven by a body-sway
+    # pendulum (author._bust). Non-standard id; won't be driven by stock ARKit/tracking mappings.
+    ("ParamBustY", -1.0, 1.0, 0.0),
 ]
 
 # Limb articulation (Phase 3). NOTE: Live2D has **no canonical arm/leg parameter ids** — these are

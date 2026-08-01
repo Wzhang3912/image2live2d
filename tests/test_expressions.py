@@ -91,6 +91,46 @@ def test_smile_layers_a_happy_squint_but_sad_angry_keep_eyes_open():
         assert not any(i.startswith("ParamEye") for i in ids)              # no eye axis in sad/angry
 
 
+def test_angry_and_sad_layer_a_brow_tilt():
+    # A full face gains ParamBrowL/RForm; angry drives them to +max (furrow) and sad to -min (worried),
+    # each eased from the neutral 0. Smile does NOT use the tilt axis.
+    _, _, auth = _face_params()
+    anims = {a.name: a for a in generate_expressions(auth.parameters)}
+    angry_form = next(ln for ln in anims["angry"].lanes if ln.param_id == "ParamBrowLForm")
+    sad_form = next(ln for ln in anims["sad"].lanes if ln.param_id == "ParamBrowLForm")
+    assert angry_form.keyframes[0].value == 0.0 and angry_form.keyframes[-1].value > 0.0   # furrow
+    assert sad_form.keyframes[0].value == 0.0 and sad_form.keyframes[-1].value < 0.0        # worried
+    assert not any(ln.param_id.endswith("Form") and ln.param_id.startswith("ParamBrow")
+                   for ln in anims["smile"].lanes)                                          # smile: no tilt
+
+
+def test_brow_form_is_a_tilt_inner_end_drops_at_plus_one():
+    # +1 (angry) must ROTATE the brow: the inner end (toward the face midline) drops and the outer rises,
+    # and both brows furrow inward from one shared value — not a flat raise.
+    eyes = [("eye_l", (0.30, 0.60, 0.45, 0.72)), ("eye_r", (0.55, 0.60, 0.70, 0.72))]
+    brows = [("eyebrow_l", (0.28, 0.76, 0.46, 0.82)), ("eyebrow_r", (0.54, 0.76, 0.72, 0.82))]
+    layers = [Layer(id="face_base", semantic_role=R.face_base, texture_path=Path("f.png"),
+                    draw_order=0, width=64, height=64)]
+    meshes = [grid_mesh("face_base", (0.2, 0.4, 0.8, 0.95), lambda u, v: 255, grid=2)]
+    for i, (pid, rect) in enumerate(eyes + brows):
+        role = {"eye_l": R.eye_l, "eye_r": R.eye_r, "eyebrow_l": R.eyebrow_l, "eyebrow_r": R.eyebrow_r}[pid]
+        layers.append(Layer(id=pid, semantic_role=role, texture_path=Path(f"{pid}.png"),
+                            draw_order=10 + i, width=64, height=64))
+        meshes.append(grid_mesh(pid, rect, lambda u, v: 255, grid=6))
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    auth = author_rig(stack, meshes, select_template(stack))
+    mbp = {m.part_id: m for m in meshes}
+    face_cx = 0.5   # eye centroid
+    for pid, form_id in (("eyebrow_l", "ParamBrowLForm"), ("eyebrow_r", "ParamBrowRForm")):
+        p = next(pp for pp in auth.parameters if pp.id == form_id)
+        off = p.keyforms[-1].mesh_offsets[pid]           # +1 keyform
+        verts = mbp[pid].vertices
+        pairs = list(zip(verts, off))
+        inner = min(pairs, key=lambda t: abs(t[0][0] - face_cx))   # end nearest the midline
+        outer = max(pairs, key=lambda t: abs(t[0][0] - face_cx))
+        assert inner[1][1] < 0.0 < outer[1][1]           # inner drops, outer rises -> a tilt, mirrored L/R
+
+
 def test_eye_smile_authors_an_upward_arch_not_a_flat_close():
     # The smile deform must be an ARCH (peak at the eye centre) — a vertex near the centre rises more than
     # one at the corner — so it reads as "^", distinct from the flat collapse a blink authors.

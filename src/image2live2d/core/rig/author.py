@@ -151,6 +151,11 @@ _EYEBALL_FRAC = 0.25  # pupil shift as fraction of pupil bbox at +-1
 # crosses the eye. See _brow. A fraction of a thin brow's thickness barely moved it before (#8).
 _BROW_UP = 1.6        # raise (ParamBrow*Y +1) as a multiple of the brow->eye gap
 _BROW_DOWN = 0.6      # lower (ParamBrow*Y -1) as a fraction of the gap (< 1 = stays clear of the eye)
+# Brow FORM (tilt/angle, ParamBrow*Form) — a separate emotional axis from the raise: the brow rotates
+# about its own centre so one end lifts and the other drops. +1 = angry (the INNER end, toward the face
+# midline, drops into a furrow); -1 = sad/worried (the inner end lifts). The end lift at +-1 is this
+# fraction of the brow->eye gap, kept < 1 so the dropped inner end never crosses into the eye. See _brow_form.
+_BROW_FORM = 0.55
 _MOUTH_OPEN = 0.7     # lower-lip drop as fraction of mouth bbox height at 1
 _UPPER_LIP_FRAC = 0.35  # upper-lip *rise* on open as a fraction of the lower-lip drop — the jaw does
 #                         most of the opening, but a small upper-lip lift turns a jaw-slide into a
@@ -344,11 +349,19 @@ def author_rig(
     eye_grp = members(SemanticRole.eye_l, SemanticRole.eye_r)
     eye_top = max((y for _, m in eye_grp for _, y in m.vertices), default=None)  # y-up: top of the eye
     brow_l = members(SemanticRole.eyebrow_l)
+    brow_r = members(SemanticRole.eyebrow_r)
+    # Face midline for the brow-form tilt: eye centroid if present, else the brows' own midpoint. Both
+    # brows share it, so each furrows toward the same centre (see _brow_form).
+    _fx = [x for _, m in (eye_grp or (brow_l + brow_r)) for x, _ in m.vertices]
+    face_cx = (sum(_fx) / len(_fx)) if _fx else None
     if brow_l:
         params.append(_brow("ParamBrowLY", brow_l, eye_top))
-    brow_r = members(SemanticRole.eyebrow_r)
+        if face_cx is not None:
+            params.append(_brow_form("ParamBrowLForm", brow_l, face_cx, eye_top))
     if brow_r:
         params.append(_brow("ParamBrowRY", brow_r, eye_top))
+        if face_cx is not None:
+            params.append(_brow_form("ParamBrowRForm", brow_r, face_cx, eye_top))
 
     # --- Hair sway (physics OUTPUT params; the physics rig drives these) ------------------------
     # P2: one param per hair PART (strand), not one per role — so twin-tails / a ponytail + fringe
@@ -1146,6 +1159,31 @@ def _brow(param_id: str, group: list[tuple[str, Mesh]], eye_top: float | None = 
     def at(sign: float) -> dict[str, list[Vec2]]:
         dy = sign * gap * (_BROW_UP if sign > 0 else _BROW_DOWN)   # generous up, eye-safe down
         return {pid: _translate(m, 0.0, dy) for pid, m in group}
+
+    return _tri(param_id, at)
+
+
+def _brow_form(param_id: str, group: list[tuple[str, Mesh]], face_cx: float,
+               eye_top: float | None = None) -> Parameter:
+    """Brow TILT (ParamBrow*Form), the emotional-angle axis distinct from the raise (_brow): the brow
+    rotates about its own centre so one end lifts and the other drops. At +1 the INNER end (nearest the
+    face midline ``face_cx``) drops into an angry furrow; at -1 it lifts into a sad/worried arch. The
+    end lift is ``_BROW_FORM`` of the brow->eye gap (so the dropped inner end stays clear of the eye,
+    like the raise). ``inner_sign`` flips per side so both brows furrow *inward* from one shared value."""
+    xs = [x for _, m in group for x, _ in m.vertices]
+    cx = (min(xs) + max(xs)) / 2.0
+    half_w = max((max(xs) - min(xs)) / 2.0, 1e-6)
+    gy0 = min(y for _, m in group for _, y in m.vertices)
+    gy1 = max(y for _, m in group for _, y in m.vertices)
+    gap = max((gy0 - eye_top) if eye_top is not None else (gy1 - gy0), 1e-6)
+    inner_sign = 1.0 if face_cx >= cx else -1.0     # +1: inner end is at larger x; -1: at smaller x
+    lift = _BROW_FORM * gap
+
+    def at(sign: float) -> dict[str, list[Vec2]]:
+        # dy grows with horizontal distance from the brow centre and flips sign across it (a rotation);
+        # -sign*inner_sign makes the inner end drop at +1 on both brows.
+        return {pid: [(0.0, -sign * lift * inner_sign * (x - cx) / half_w) for x, _ in m.vertices]
+                for pid, m in group}
 
     return _tri(param_id, at)
 

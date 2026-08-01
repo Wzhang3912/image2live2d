@@ -206,6 +206,9 @@ _DRIVES: dict[str, Drive] = {
                    note="the eye squashes shut but never vanishes (a full collapse zeroes its area)"),
     "brows": Drive({"ParamBrowLY": 1.0, "ParamBrowRY": 1.0},
                    note="both brows read *through* the fringe — the right one used to drive nothing"),
+    "brow_form": Drive({"ParamBrowLForm": 1.0, "ParamBrowRForm": 1.0},
+                       note="both brows TILT (rotate about their centre): +1 furrows the inner ends down "
+                            "(angry), -1 lifts them (sad) — a shape change, not a raise, and never into the eye"),
 }
 
 DRIVE_NAMES: tuple[str, ...] = tuple(_DRIVES)

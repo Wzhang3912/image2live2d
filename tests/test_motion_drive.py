@@ -37,11 +37,13 @@ def _full_body_params() -> list[Parameter]:
     """The parameter shape of a real rigged character: face + head + body + limbs + physics outputs."""
     return [
         _param("ParamEyeLOpen", 0.0, 1.0, 1.0), _param("ParamEyeROpen", 0.0, 1.0, 1.0),
+        _param("ParamEyeLSmile", 0.0, 1.0), _param("ParamEyeRSmile", 0.0, 1.0),
         _param("ParamMouthOpenY", 0.0, 1.0), _param("ParamMouthForm", -1.0, 1.0),
         _param("ParamAngleX", -30.0, 30.0), _param("ParamAngleY", -30.0, 30.0),
         _param("ParamAngleZ", -30.0, 30.0),
         _param("ParamEyeBallX", -1.0, 1.0), _param("ParamEyeBallY", -1.0, 1.0),
         _param("ParamBrowLY", -1.0, 1.0), _param("ParamBrowRY", -1.0, 1.0),
+        _param("ParamBrowLForm", -1.0, 1.0), _param("ParamBrowRForm", -1.0, 1.0),
         _param("ParamBodyAngleX", -10.0, 10.0), _param("ParamBodyAngleY", -10.0, 10.0),
         _param("ParamBodyAngleZ", -10.0, 10.0),
         _param("ParamArmLA", -10.0, 10.0), _param("ParamArmLB", -10.0, 10.0),

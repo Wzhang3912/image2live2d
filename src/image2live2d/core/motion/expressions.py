@@ -41,10 +41,12 @@ _EXPRESSIONS: dict[str, dict[str, float]] = {
     # mouth agape, eyes wide, brows shot up
     "surprise": {"ParamMouthOpenY": 0.7, "ParamEyeLOpen": 1.0, "ParamEyeROpen": 1.0,
                  "ParamBrowLY": 1.0, "ParamBrowRY": 1.0},
-    # corners down, brows raised (worried inner-up read)
-    "sad": {"ParamMouthForm": -1.0, "ParamBrowLY": 0.5, "ParamBrowRY": 0.5},
-    # frown + furrowed brows — the brow direction is what reads as anger vs sad
-    "angry": {"ParamMouthForm": -0.7, "ParamBrowLY": -1.0, "ParamBrowRY": -1.0},
+    # corners down, brows raised AND tilted inner-up (the worried "/  \" that reads as sad)
+    "sad": {"ParamMouthForm": -1.0, "ParamBrowLY": 0.5, "ParamBrowRY": 0.5,
+            "ParamBrowLForm": -1.0, "ParamBrowRForm": -1.0},
+    # frown + brows lowered AND furrowed inner-down (the "\  /" that reads as anger, not just low brows)
+    "angry": {"ParamMouthForm": -0.7, "ParamBrowLY": -1.0, "ParamBrowRY": -1.0,
+              "ParamBrowLForm": 1.0, "ParamBrowRForm": 1.0},
 }
 
 EXPRESSION_NAMES: tuple[str, ...] = tuple(_EXPRESSIONS)

@@ -30,6 +30,8 @@ _PARAM_SPECS: list[tuple[str, float, float, float]] = [
     # Brows
     ("ParamBrowLY", -1.0, 1.0, 0.0),
     ("ParamBrowRY", -1.0, 1.0, 0.0),
+    ("ParamBrowLForm", -1.0, 1.0, 0.0),   # brow tilt: +1 = angry (inner end down), -1 = sad (inner up)
+    ("ParamBrowRForm", -1.0, 1.0, 0.0),
     # Mouth
     ("ParamMouthForm", -1.0, 1.0, 0.0),
     ("ParamMouthOpenY", 0.0, 1.0, 0.0),

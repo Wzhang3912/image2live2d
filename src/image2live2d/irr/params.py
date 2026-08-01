@@ -23,6 +23,8 @@ _PARAM_SPECS: list[tuple[str, float, float, float]] = [
     # Eyes
     ("ParamEyeLOpen", 0.0, 1.0, 1.0),
     ("ParamEyeROpen", 0.0, 1.0, 1.0),
+    ("ParamEyeLSmile", 0.0, 1.0, 0.0),   # happy squint "^" — closed onto an upward-arched lid line
+    ("ParamEyeRSmile", 0.0, 1.0, 0.0),
     ("ParamEyeBallX", -1.0, 1.0, 0.0),
     ("ParamEyeBallY", -1.0, 1.0, 0.0),
     # Brows

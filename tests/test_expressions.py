@@ -76,6 +76,44 @@ def test_no_face_params_no_expressions():
     assert generate_expressions([Parameter(id="ParamBreath", min=0.0, max=1.0, default=0.0)]) == []
 
 
+def test_smile_layers_a_happy_squint_but_sad_angry_keep_eyes_open():
+    # A full face gains ParamEyeL/RSmile, so the smile clip drives a genuine eye-form squint (eased from
+    # the neutral 0 to the pose value and held); sad/angry deliberately do NOT touch any eye axis.
+    _, _, auth = _face_params()
+    anims = {a.name: a for a in generate_expressions(auth.parameters)}
+    smile_ids = {ln.param_id for ln in anims["smile"].lanes}
+    assert {"ParamEyeLSmile", "ParamEyeRSmile"} <= smile_ids
+    squint = next(ln for ln in anims["smile"].lanes if ln.param_id == "ParamEyeLSmile")
+    assert [(k.frame, k.value) for k in squint.keyframes][0] == (0, 0.0)   # from neutral
+    assert squint.keyframes[-1].value > 0.0                                # to a held squint
+    for name in ("sad", "angry"):
+        ids = {ln.param_id for ln in anims[name].lanes}
+        assert not any(i.startswith("ParamEye") for i in ids)              # no eye axis in sad/angry
+
+
+def test_eye_smile_authors_an_upward_arch_not_a_flat_close():
+    # The smile deform must be an ARCH (peak at the eye centre) — a vertex near the centre rises more than
+    # one at the corner — so it reads as "^", distinct from the flat collapse a blink authors.
+    eye_rect = (0.30, 0.60, 0.70, 0.80)
+    layers = [Layer(id="face_base", semantic_role=R.face_base, texture_path=Path("f.png"),
+                    draw_order=0, width=64, height=64),
+              Layer(id="eye_l", semantic_role=R.eye_l, texture_path=Path("e.png"),
+                    draw_order=10, width=64, height=64)]
+    meshes = [grid_mesh("face_base", (0.2, 0.4, 0.8, 0.95), lambda u, v: 255, grid=2),
+              grid_mesh("eye_l", eye_rect, lambda u, v: 255, grid=6)]
+    stack = LayerStack(layers=layers, canvas_width=64, canvas_height=64)
+    auth = author_rig(stack, meshes, select_template(stack))
+    smile = next(p for p in auth.parameters if p.id == "ParamEyeLSmile")
+    active = smile.keyforms[-1].mesh_offsets["eye_l"]
+    verts = next(m for m in meshes if m.part_id == "eye_l").vertices
+    cx = (eye_rect[0] + eye_rect[2]) / 2.0
+    # the vertex nearest the horizontal centre vs one nearest a corner (both on the lower half so both rise)
+    lower = [(i, x, y) for i, (x, y) in enumerate(verts) if y < (eye_rect[1] + eye_rect[3]) / 2.0]
+    ctr = min(lower, key=lambda t: abs(t[1] - cx))
+    corner = max(lower, key=lambda t: abs(t[1] - cx))
+    assert active[ctr[0]][1] > active[corner[0]][1] > 0.0    # centre rises MORE than the corner -> an arch
+
+
 def test_expressions_emit_on_both_backends():
     stack, meshes, auth = _face_params()
     params = auth.parameters

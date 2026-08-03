@@ -35,6 +35,8 @@ _PARAM_SPECS: list[tuple[str, float, float, float]] = [
     # Mouth
     ("ParamMouthForm", -1.0, 1.0, 0.0),
     ("ParamMouthOpenY", 0.0, 1.0, 0.0),
+    # Cheek — fades a synthesised blush overlay in (opacity 0 at rest); see core.synth.blush
+    ("ParamCheek", 0.0, 1.0, 0.0),
     # Body
     ("ParamBodyAngleX", -10.0, 10.0, 0.0),
     ("ParamBodyAngleY", -10.0, 10.0, 0.0),

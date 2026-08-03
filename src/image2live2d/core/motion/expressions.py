@@ -47,6 +47,8 @@ _EXPRESSIONS: dict[str, dict[str, float]] = {
     # frown + brows lowered AND furrowed inner-down (the "\  /" that reads as anger, not just low brows)
     "angry": {"ParamMouthForm": -0.7, "ParamBrowLY": -1.0, "ParamBrowRY": -1.0,
               "ParamBrowLForm": 1.0, "ParamBrowRForm": 1.0},
+    # bashful: a full cheek blush, a soft smile, eyes cast down and slightly away — the blush carries it
+    "shy": {"ParamCheek": 1.0, "ParamMouthForm": 0.35, "ParamEyeBallY": -0.4, "ParamEyeBallX": 0.3},
 }
 
 EXPRESSION_NAMES: tuple[str, ...] = tuple(_EXPRESSIONS)

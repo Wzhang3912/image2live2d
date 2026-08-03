@@ -76,6 +76,15 @@ def test_no_face_params_no_expressions():
     assert generate_expressions([Parameter(id="ParamBreath", min=0.0, max=1.0, default=0.0)]) == []
 
 
+def test_shy_expression_fades_the_cheek_blush():
+    # The "shy" expression eases ParamCheek from the neutral 0 to a full blush and holds it.
+    params = [Parameter(id="ParamCheek", min=0.0, max=1.0, default=0.0),
+              Parameter(id="ParamMouthForm", min=-1.0, max=1.0, default=0.0)]
+    shy = next(a for a in generate_expressions(params) if a.name == "shy")
+    cheek = next(ln for ln in shy.lanes if ln.param_id == "ParamCheek")
+    assert cheek.keyframes[0].value == 0.0 and cheek.keyframes[-1].value == 1.0
+
+
 def test_smile_layers_a_happy_squint_but_sad_angry_keep_eyes_open():
     # A full face gains ParamEyeL/RSmile, so the smile clip drives a genuine eye-form squint (eased from
     # the neutral 0 to the pose value and held); sad/angry deliberately do NOT touch any eye axis.

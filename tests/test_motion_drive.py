@@ -39,6 +39,7 @@ def _full_body_params() -> list[Parameter]:
         _param("ParamEyeLOpen", 0.0, 1.0, 1.0), _param("ParamEyeROpen", 0.0, 1.0, 1.0),
         _param("ParamEyeLSmile", 0.0, 1.0), _param("ParamEyeRSmile", 0.0, 1.0),
         _param("ParamMouthOpenY", 0.0, 1.0), _param("ParamMouthForm", -1.0, 1.0),
+        _param("ParamCheek", 0.0, 1.0),
         _param("ParamAngleX", -30.0, 30.0), _param("ParamAngleY", -30.0, 30.0),
         _param("ParamAngleZ", -30.0, 30.0),
         _param("ParamEyeBallX", -1.0, 1.0), _param("ParamEyeBallY", -1.0, 1.0),

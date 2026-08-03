@@ -292,6 +292,11 @@ def author_rig(
         params.append(_mouth_open("ParamMouthOpenY", mouth, cavity, open_fn))
         params.append(_mouth_form("ParamMouthForm", mouth, mouth_lm=lm.mouth))
 
+    # --- Cheek blush (fades a synthesised overlay in; opacity-only, no deformation) --------------
+    blush = members(SemanticRole.blush)
+    if blush:
+        params.append(_cheek("ParamCheek", blush))
+
     # --- Classify accessories as head- vs body-mounted ------------------------------------------
     # Accessories aren't a fixed head/body role (a hair-bow vs a belt), so bind each to whichever
     # group its position implies: an ornament sitting in the head region must follow the head turn
@@ -749,6 +754,18 @@ def _eye_smile(param_id: str, group: list[tuple[str, Mesh]], eye_lm=None) -> Par
     rest = Keyform(value=0.0, mesh_offsets={pid: _zeros(m) for pid, m in group})
     smiled = Keyform(value=1.0, mesh_offsets={pid: arc(m) for pid, m in group})
     return _set_keyforms(param_id, [rest, smiled])
+
+
+def _cheek(param_id: str, group: list[tuple[str, Mesh]]) -> Parameter:
+    """Fade a synthesised blush overlay in: opacity 0 at ``ParamCheek=0`` (rest) -> 1 at 1. No deformation
+    — the blush is a fixed overlay that simply appears. Because it is invisible at rest, a character with a
+    synthesised blush renders identically to one without until the parameter is driven (see core.synth.blush).
+    Needs the per-keyform opacity the moc3 emitter honours (same plumbing as the closed-eye crossfade)."""
+    rest = Keyform(value=0.0, mesh_offsets={pid: _zeros(m) for pid, m in group},
+                   opacity_overrides={pid: 0.0 for pid, _ in group})
+    on = Keyform(value=1.0, mesh_offsets={pid: _zeros(m) for pid, m in group},
+                 opacity_overrides={pid: 1.0 for pid, _ in group})
+    return _set_keyforms(param_id, [rest, on])
 
 
 def _mouth_open(

@@ -76,10 +76,10 @@ def test_raws_to_stack_builds_pipeline_ready_stack(tmp_path):
 
     # the extracted stack drives the rest of the spine unchanged
     rig = rig_from_stack(stack, name="frompsd")
-    assert {"ParamMouthOpenY", "ParamEyeLOpen", "ParamEyeROpen"} <= rig.parameter_ids()
-    # 4 decomposed (face/eye_l/eye_r/mouth) + 2 synthesised closed-eye lash lines. No mouth cavity: this
-    # stub mouth is a DARK shape, so core.synth reads it as already-drawn-open and leaves it alone.
-    assert len(rig.parts) == 6
+    assert {"ParamMouthOpenY", "ParamEyeLOpen", "ParamEyeROpen", "ParamCheek"} <= rig.parameter_ids()
+    # 4 decomposed (face/eye_l/eye_r/mouth) + 2 synthesised closed-eye lash lines + 2 synthesised blush
+    # cheeks. No mouth cavity: this stub mouth is a DARK shape, so core.synth reads it as already-drawn-open.
+    assert len(rig.parts) == 8
 
 
 @pytest.mark.skipif(not (_HAS_PIL and _HAS_PSD), reason="needs Pillow + psd-tools")
@@ -112,6 +112,6 @@ def test_from_psd_end_to_end(tmp_path):
     assert {R.eye_l, R.eye_r, R.mouth} <= {lyr.semantic_role for lyr in stack.layers}
     rig = rig_from_stack(stack, name="char")
     assert "ParamMouthOpenY" in rig.parameter_ids()
-    # 4 decomposed + 2 synthesised closed-eye lash lines (eye_l/eye_r both present). No mouth cavity: the
-    # stub mouth is a DARK shape, read as already-drawn-open.
-    assert len(rig.parts) == 6
+    # 4 decomposed + 2 synthesised closed-eye lash lines + 2 synthesised blush cheeks (eye_l/eye_r both
+    # present). No mouth cavity: the stub mouth is a DARK shape, read as already-drawn-open.
+    assert len(rig.parts) == 8

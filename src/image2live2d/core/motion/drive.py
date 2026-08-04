@@ -200,6 +200,9 @@ _DRIVES: dict[str, Drive] = {
                    cycles=2, hold=10, settle=20,
                    note="a happy squint: the eyes close onto an upward '^' arc while the mouth curves up, "
                         "the eye never flattening to a plain blink"),
+    "cheek": Drive({"ParamCheek": 1.0}, cycles=2, hold=12, settle=16,
+                   note="a synthesised blush fades in on the cheeks (opacity 0 at rest) and back out — "
+                        "invisible until driven, so it never alters the resting face"),
     "look": Drive({"ParamEyeBallX": 1.0, "ParamEyeBallY": 1.0},
                   note="pupils travel inside the eye and never cross the lid"),
     "blink": Drive({"ParamEyeLOpen": -1.0, "ParamEyeROpen": -1.0}, cycles=2, hold=6, settle=20,

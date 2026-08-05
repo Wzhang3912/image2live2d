@@ -24,10 +24,12 @@
 </p>
 
 <p align="center">
-  <a href="media/demo.mp4"><img src="media/demo.gif" alt="image2live2d: prompt an image model → auto-decompose → auto-rig → live puppet, then the same pipeline across sixteen character styles" width="820"></a>
+  <a href="media/demo.mp4"><img src="media/demo.gif" alt="Generate a character with an image model, then image2live2d auto-decomposes, rigs, and animates it into a live puppet — the same pipeline across sixteen styles" width="820"></a>
 </p>
 
-<p align="center"><i>Prompt an image model → auto-decompose → auto-rig → live puppet — then the same pipeline across sixteen different styles. &nbsp;<a href="media/demo.mp4">▶ Full-quality MP4</a></i></p>
+<p align="center"><i>Generate a character with any image model, then <b>image2live2d</b> does the rest — auto-decompose → auto-rig → live puppet. The same pipeline, across sixteen styles. &nbsp;<a href="media/demo.mp4">▶ Full-quality MP4</a></i></p>
+
+<p align="center"><sub>The prompt → image step shown first is done by a separate image model (e.g. GPT Image 2) — <b>image2live2d starts from that image</b>. An integrated, end-to-end prompt-to-puppet pipeline isn't built yet; today you bring the illustration.</sub></p>
 
 ---
 

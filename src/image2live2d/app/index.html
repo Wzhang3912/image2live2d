@@ -75,6 +75,15 @@
   <span id="mode" style="margin-left:auto"></span>
 </header>
 
+<section class="card" style="margin:20px" aria-labelledby="setup-title">
+<h2 id="setup-title">Set up your local GPU</h2>
+<p>PSD and layer ZIP files work without a GPU. Flat images use See-through on your own NVIDIA GPU.</p>
+<p id="setup-status" role="status">Checking your environment…</p>
+<p id="setup-detail"></p>
+<button id="install-models" hidden>Download See-through models (allow 20 GiB free disk)</button>
+<button id="check-setup">Check again</button>
+<p><a href="https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html" target="_blank" rel="noopener">NVIDIA Container Toolkit installation</a> · Start GPU support: <code>./start.sh --gpu</code></p>
+</section>
 <div class="wrap">
   <!-- LEFT: upload -->
   <div>
@@ -126,14 +135,36 @@
 </div>
 
 <script>
-const DECOMPOSE_READY = __DECOMPOSE_READY__;
+let DECOMPOSE_READY = __DECOMPOSE_READY__;
 const $ = s => document.querySelector(s);
 let jobId=null, params=[], pollTimer=null, renderTimer=null;
 
+async function checkSetup(){
+  try {
+    const r=await fetch('/api/setup'); const s=await r.json();
+    DECOMPOSE_READY=!!s.local.ready || !!s.external_configured;
+    $('#setup-status').textContent=s.layers_ready ? 'PSD / ZIP conversion ready.' : 'Missing dependencies: '+s.missing_dependencies.join(', ');
+    $('#setup-detail').textContent=(s.local.gpu_name ? s.local.gpu_name+' · ' : '')+s.local.message+(s.local.free_gb !== undefined ? ' · '+s.local.free_gb+' GiB free' : '');
+    $('#install-models').hidden=!s.local.gpu || s.local.models_installed;
+    $('#install-models').disabled=s.local.state==='downloading';
+    $('#mode').textContent=s.external_configured ? 'Existing decomposer configured' : s.local.ready ? 'Local GPU ready' : s.layers_ready ? 'PSD / ZIP ready · GPU setup needed' : 'Dependencies need attention';
+  } catch(e) { $('#setup-status').textContent='Cannot check setup. Check that the app is running.'; }
+}
+$('#check-setup').onclick=checkSetup;
+$('#install-models').onclick=async()=>{
+  $('#install-models').disabled=true;
+  try {
+    const r=await fetch('/api/setup/models',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});
+    if(!r.ok) { const e=await r.json(); $('#setup-detail').textContent=e.error; return; }
+    await checkSetup();
+  } catch(e) { $('#setup-detail').textContent='Download request failed. Check the local GPU container and retry.'; }
+  finally { $('#install-models').disabled=false; }
+};
+checkSetup(); setInterval(checkSetup,5000);
 // mode badge
 $('#mode').innerHTML = DECOMPOSE_READY
   ? '<span class="badge on">flat-image decompose: ON</span>'
-  : '<span class="badge off">layered-only — set IMAGE2LIVE2D_DECOMPOSE_URL for flat images</span>';
+  : '<span class="badge off">Checking local GPU setup</span>';
 
 // ---- upload UI ----
 const drop=$('#drop'), fileEl=$('#file'); let chosen=null;
@@ -148,7 +179,7 @@ function pick(f){
   const t=$('#thumb');
   if(['png','jpg','jpeg','webp'].includes(ext)){
     const url=URL.createObjectURL(f); t.innerHTML='<img src="'+url+'">';
-    if(!DECOMPOSE_READY) $('#uphint').textContent='⚠ flat image needs the decompose service; it will fail at the Decompose step unless IMAGE2LIVE2D_DECOMPOSE_URL is set.';
+    if(!DECOMPOSE_READY) $('#uphint').textContent='Finish local GPU setup above before converting a flat image.';
     else $('#uphint').textContent='';
   } else { t.innerHTML='<div class="hint">'+f.name+'</div>'; $('#uphint').textContent=''; }
 }
@@ -156,6 +187,10 @@ function pick(f){
 // ---- run ----
 $('#run').addEventListener('click',async()=>{
   if(!chosen) return;
+  if(/\.(png|jpe?g|webp)$/i.test(chosen.name) && !DECOMPOSE_READY){
+    $('#uphint').textContent='Finish local GPU setup above before converting this image.';
+    $('#setup-title').scrollIntoView({behavior:'smooth'}); return;
+  }
   $('#run').disabled=true; $('#resultcard').style.display='none'; $('#previewcard').style.display='none';
   $('#errbox').innerHTML='';
   const r=await fetch('/api/jobs?name='+encodeURIComponent(chosen.name),{method:'POST',body:chosen});

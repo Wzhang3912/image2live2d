@@ -222,3 +222,48 @@ python -m pytest -q
 
 Apache-2.0 — see [LICENSE](LICENSE). Third-party components (See-through, nijilive, Live2D Cubism) are
 governed by their own licenses.
+
+## Run locally with Docker
+
+From this checkout, run:
+
+```sh
+./start.sh
+```
+
+Docker with Compose is required (on Windows, run the launcher inside WSL2). Open **http://localhost:8000**. PSD and ZIP
+conversion works immediately without a GPU. The page checks the local setup and
+explains what is missing for flat-image conversion.
+
+For flat images, use an NVIDIA CUDA GPU with a compatible driver and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+The launcher detects `nvidia-smi`; you can also explicitly enable GPU support:
+
+```sh
+./start.sh --gpu
+```
+
+This builds and starts See-through on **your own GPU**; no existing inference
+server or cloud account is needed. The first build downloads substantial Python
+and CUDA dependencies and may take several minutes. In the app, click
+**Download See-through models** to install the weights. Allow at least 20 GiB
+free on Docker's model volume, plus space for the container images. Downloads
+resume when retried. Model revisions and files persist in the `models` volume
+across container restarts. “Ready” means CUDA is available and model files are
+installed; your first conversion verifies inference on your hardware.
+
+Apple and AMD GPUs are not supported by this container setup. These machines
+can still use PSD/ZIP conversion. NVIDIA inference has not been verified on every
+GPU; out-of-memory errors may require a GPU with more VRAM.
+
+```sh
+docker compose --profile gpu stop          # stop; retain models
+docker compose --profile gpu start         # restart existing containers
+docker compose logs -f seethrough          # build/runtime and download diagnostics
+docker compose --profile gpu down          # remove containers; retain models
+```
+
+To delete the downloaded models too, use `docker compose --profile gpu down -v`.
+The app listens only on localhost and the GPU companion has no published port.
+Uploads and generated jobs are temporary and are lost when the app container is
+recreated. This setup is intended for personal local use.

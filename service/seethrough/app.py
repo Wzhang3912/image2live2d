@@ -31,6 +31,10 @@ from fastapi.responses import JSONResponse, Response
 
 from pipeline import WarmPipeline, WarmUnavailable
 
+from model_manager import ModelManager
+
+models = ModelManager()
+
 log = logging.getLogger("seethrough")
 logging.basicConfig(level=logging.INFO)
 
@@ -73,6 +77,21 @@ def _startup() -> None:
         _warm = None
 
 
+@app.get("/setup")
+def setup_status():
+    return models.status()
+
+
+@app.post("/setup/models")
+def install_models(request: Request):
+    if TOKEN and request.headers.get("X-Auth-Token") != TOKEN:
+        raise HTTPException(401, "Invalid token")
+    if not models.status()["gpu"]:
+        raise HTTPException(409, "NVIDIA CUDA GPU is unavailable")
+    models.install()
+    return models.status()
+
+
 @app.get("/health")
 def health() -> dict:
     return {
@@ -88,6 +107,8 @@ async def decompose(request: Request) -> JSONResponse:
     """Start an async decompose job; returns {"job_id"} immediately. Poll GET /jobs/{id}."""
     if TOKEN and request.headers.get("X-Auth-Token") != TOKEN:
         raise HTTPException(status_code=401, detail="missing/invalid X-Auth-Token")
+    if os.environ.get("MANAGED_MODELS") and not models.status()["ready"]:
+        raise HTTPException(409, "Install the local models in the app first")
     data = await request.body()
     if not data:
         raise HTTPException(status_code=400, detail="empty request body (POST the image bytes)")
@@ -156,20 +177,25 @@ def _infer(src: Path, out_dir: Path) -> Path:
 def _subprocess_infer(src: Path) -> Path:
     """Run See-through's CLI in a fresh process; return the newest layered .psd (raises on failure)."""
     cmd = [PYTHON, SCRIPT, "--srcp", str(src), "--save_to_psd"]
+    output = src.parent / "output"
+    cmd += ["--save_dir", str(output)]
+    if os.environ.get("MANAGED_MODELS"):
+        paths = models.paths()
+        cmd += ["--repo_id_layerdiff", paths["layerdiff"], "--repo_id_depth", paths["depth"]]
     if RESOLUTION:
         cmd += ["--resolution", RESOLUTION]
     with _subproc_lock:
-        before = set(OUTPUT_DIR.rglob("*.psd")) if OUTPUT_DIR.exists() else set()
+        before = set(output.rglob("*.psd")) if output.exists() else set()
         proc = subprocess.run(
             cmd, cwd=str(SEE_THROUGH_DIR), capture_output=True, text=True, timeout=TIMEOUT
         )
         if proc.returncode != 0:
             tail = (proc.stderr or "")[-1500:] + "\n--stdout--\n" + (proc.stdout or "")[-1500:]
             raise RuntimeError(f"see-through failed (rc={proc.returncode}):\n{tail}")
-        after = set(OUTPUT_DIR.rglob("*.psd")) if OUTPUT_DIR.exists() else set()
-    pool = (after - before) or after
+        after = set(output.rglob("*.psd")) if output.exists() else set()
+    pool = after - before
     # See-through writes both a layered "input.psd" AND a "input_depth.psd"; we want the layers one.
-    pool = {p for p in pool if not p.name.endswith("_depth.psd")} or pool
+    pool = {p for p in pool if not p.name.endswith("_depth.psd")}
     if not pool:
         raise RuntimeError("see-through produced no .psd")
     return max(pool, key=lambda p: p.stat().st_mtime)

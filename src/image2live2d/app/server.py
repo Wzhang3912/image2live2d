@@ -654,6 +654,13 @@ def _make_handler():
         def do_GET(self):  # noqa: N802
             u = urlparse(self.path)
             path = u.path
+            if path == "/healthz":
+                self._json(200, {"ok": True})
+                return
+            if path == "/api/setup":
+                from .setup import readiness
+                self._json(200, readiness())
+                return
             if path in ("/", "/index.html"):
                 page = _page().replace("__DECOMPOSE_READY__", "true" if _flat_decompose_available() else "false")
                 self._send(200, page.encode(), "text/html; charset=utf-8")
@@ -762,11 +769,27 @@ def _make_handler():
 
         def do_POST(self):  # noqa: N802
             u = urlparse(self.path)
+            if u.path == "/api/setup/models":
+                if self.headers.get("Origin") != "http://" + self.headers.get("Host", ""):
+                    self._json(403, {"error": "Use the setup button in this app."})
+                    return
+                from .setup import companion
+                try:
+                    self._json(200, companion(action=True))
+                except (OSError, ValueError):
+                    self._json(503, {"error": "Local GPU container unavailable. Check docker compose logs seethrough."})
+                return
             length = int(self.headers.get("Content-Length", "0"))
             data = self.rfile.read(length)
             qs = parse_qs(u.query)
             filename = (qs.get("name") or ["upload"])[0]
             if u.path == "/api/jobs":
+                if (os.environ.get("IMAGE2LIVE2D_LOCAL_GPU_URL")
+                        and Path(filename).suffix.lower() in _FLAT_IMAGE):
+                    from .setup import readiness
+                    if not readiness()["local"]["ready"]:
+                        self._json(409, {"error": "Finish local GPU setup and download the models first."})
+                        return
                 try:
                     jid = start_job(data, filename)
                     self._json(200, {"job_id": jid})

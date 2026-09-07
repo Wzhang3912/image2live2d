@@ -1,0 +1,32 @@
+services:
+  app:
+    build: .
+    ports:
+      - "127.0.0.1:${PORT:-8000}:8000"
+    environment:
+      IMAGE2LIVE2D_LOCAL_GPU_URL: http://seethrough:8000
+      IMAGE2LIVE2D_DECOMPOSE_URL: http://seethrough:8000
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+  seethrough:
+    profiles: [gpu]
+    build: service/seethrough
+    volumes:
+      - models:/models
+    environment:
+      MODEL_DIR: /models
+      HF_HOME: /models/cache
+      MANAGED_MODELS: "1"
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+volumes:
+  models:

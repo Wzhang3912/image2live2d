@@ -22,7 +22,7 @@ decompose = ["torch", "numpy", "pillow", "psd-tools"]  # See-through wrapper, in
 preprocess = ["rembg", "pillow", "numpy"]          # bg removal
 mesh = ["triangle", "numpy"]                        # auto-triangulation
 rig = ["numpy", "opencv-python"]                    # landmarks/pose/fit
-app = ["pillow", "psd-tools"]                        # local web app: process PSD/layer uploads
+app = ["pillow", "psd-tools", "numpy"]                        # local web app: process PSD/layer uploads
 dev = ["pytest", "ruff", "mypy"]
 
 [tool.hatch.build.targets.wheel]

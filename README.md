@@ -44,8 +44,68 @@ with lip-sync, motion capture, or a cursor.
 
 ## Quick start
 
+### Start the app with Docker (recommended)
+
+Install Docker with Compose and Git. On Windows, run these commands inside WSL2.
+Get the project and start the app:
+
+```sh
+git clone https://github.com/Wzhang3912/image2live2d.git
+cd image2live2d
+./start.sh
+```
+
+Already have a checkout? Run `./start.sh` from its directory.
+Open **http://localhost:8000**, upload a PSD or ZIP of PNG layers, and click
+**Run pipeline** to preview and download your puppet. No GPU is needed for layered
+art; the page checks your setup and explains what is missing for flat images.
+
+### Enable flat-image conversion on your GPU
+
+For flat images, use an NVIDIA CUDA GPU with a compatible driver and the
+[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
+The launcher detects `nvidia-smi`; you can also explicitly enable GPU support:
+
+```sh
+./start.sh --gpu
+```
+
+This builds and starts See-through on **your own GPU**; no existing inference
+server or cloud account is needed. The first build downloads substantial Python
+and CUDA dependencies and may take several minutes. In the app, click
+**Download See-through models** to install the weights. Allow at least 20 GiB
+free on Docker's model volume, plus space for the container images. Downloads
+resume when retried. Model revisions and files persist in the `models` volume
+across container restarts. “Ready” means CUDA is available and model files are
+installed; your first conversion verifies inference on your hardware.
+
+Apple and AMD GPUs are not supported by this container setup. These machines
+can still use PSD/ZIP conversion. NVIDIA inference has not been verified on every
+GPU; out-of-memory errors may require a GPU with more VRAM.
+
+### Stop, restart, and manage storage
+
+```sh
+docker compose --profile gpu stop          # stop; retain models
+docker compose --profile gpu start         # restart existing containers
+docker compose logs -f seethrough          # build/runtime and download diagnostics
+docker compose --profile gpu down          # remove containers; retain models
+```
+
+To delete the downloaded models too, use `docker compose --profile gpu down -v`.
+The app listens only on localhost and the GPU companion has no published port.
+Uploads and generated jobs are temporary and are lost when the app container is
+recreated. This setup is intended for personal local use.
+
+### Python alternative (CLI and library)
+
+For Python 3.10+ users working with already-separated layers, run the following
+from the project checkout. For guided local GPU setup, use the Docker path above.
+
 ```bash
-pip install -e ".[decompose]"            # Pillow + psd-tools (PSD / layer input)
+python -m venv .venv
+source .venv/bin/activate                # Windows: .venv\Scripts\activate
+pip install -e ".[app]"                  # PSD / layer input and local web app
 
 # a folder of {order}_{role}.png layers → animatable nijilive .inp
 python -m image2live2d path/to/layers -o character.inp
@@ -72,10 +132,6 @@ from image2live2d import convert_psd
 result = convert_psd("hero.psd", "out/", live2d=True)   # nijilive .inp + Live2D bundle
 print(result.inp_path, result.passed)
 ```
-
-<!-- Media slot: a short screen-capture of `--serve` (drag-drop → preview) would sit well here.
-     Drop it at media/webapp.gif (or .mov) and uncomment:
-<p align="center"><img src="media/webapp.gif" width="720"></p> -->
 
 ## What you get
 
@@ -222,48 +278,3 @@ python -m pytest -q
 
 Apache-2.0 — see [LICENSE](LICENSE). Third-party components (See-through, nijilive, Live2D Cubism) are
 governed by their own licenses.
-
-## Run locally with Docker
-
-From this checkout, run:
-
-```sh
-./start.sh
-```
-
-Docker with Compose is required (on Windows, run the launcher inside WSL2). Open **http://localhost:8000**. PSD and ZIP
-conversion works immediately without a GPU. The page checks the local setup and
-explains what is missing for flat-image conversion.
-
-For flat images, use an NVIDIA CUDA GPU with a compatible driver and the
-[NVIDIA Container Toolkit](https://docs.nvidia.com/datacenter/cloud-native/container-toolkit/latest/install-guide.html).
-The launcher detects `nvidia-smi`; you can also explicitly enable GPU support:
-
-```sh
-./start.sh --gpu
-```
-
-This builds and starts See-through on **your own GPU**; no existing inference
-server or cloud account is needed. The first build downloads substantial Python
-and CUDA dependencies and may take several minutes. In the app, click
-**Download See-through models** to install the weights. Allow at least 20 GiB
-free on Docker's model volume, plus space for the container images. Downloads
-resume when retried. Model revisions and files persist in the `models` volume
-across container restarts. “Ready” means CUDA is available and model files are
-installed; your first conversion verifies inference on your hardware.
-
-Apple and AMD GPUs are not supported by this container setup. These machines
-can still use PSD/ZIP conversion. NVIDIA inference has not been verified on every
-GPU; out-of-memory errors may require a GPU with more VRAM.
-
-```sh
-docker compose --profile gpu stop          # stop; retain models
-docker compose --profile gpu start         # restart existing containers
-docker compose logs -f seethrough          # build/runtime and download diagnostics
-docker compose --profile gpu down          # remove containers; retain models
-```
-
-To delete the downloaded models too, use `docker compose --profile gpu down -v`.
-The app listens only on localhost and the GPU companion has no published port.
-Uploads and generated jobs are temporary and are lost when the app container is
-recreated. This setup is intended for personal local use.

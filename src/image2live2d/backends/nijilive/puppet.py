@@ -18,6 +18,7 @@ from __future__ import annotations
 import struct
 import zlib
 from dataclasses import dataclass
+from io import BytesIO
 from pathlib import Path
 
 from ...core.structure.graph import HEAD_ROLES as _HEAD_ROLES
@@ -538,7 +539,20 @@ def _load_texture(texture, root: Path | None) -> bytes:
     if root is not None:
         path = root / texture.path
         if path.is_file():
-            return path.read_bytes()
+            # INP loads texels verbatim; nijilive's Normal blend uses ONE,
+            # ONE_MINUS_SRC_ALPHA. Ordinary PNGs use straight alpha, which produces
+            # bright fringes unless we premultiply RGB before embedding (issue #95).
+            # Keep source art straight-alpha for the preview and Live2D exporters.
+            from PIL import Image
+
+            with Image.open(path) as image:
+                premultiplied = image.convert("RGBA").convert("RGBa")
+                # Reinterpret the bytes for PNG encoding. Converting RGBa back to
+                # RGBA would UN-premultiply and silently undo the correction.
+                encoded = Image.frombytes("RGBA", image.size, premultiplied.tobytes())
+            output = BytesIO()
+            encoded.save(output, format="PNG")
+            return output.getvalue()
     # No asset on disk -> synthesize a valid placeholder PNG at the declared size so the .inp is
     # self-contained and renderable. (Phase 0 uses this for the example rig.)
     return solid_png(texture.width, texture.height)
